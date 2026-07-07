@@ -1,0 +1,18 @@
+[project]
+name = "tt-turnier"
+version = "0.1.0"
+description = "Tischtennis-Turnierverwaltung (Cloudflare Python Worker + D1)"
+requires-python = ">=3.12"
+# Von Pyodide/Workers bereitgestellt und beim Deploy gebündelt:
+dependencies = [
+    "fastapi",
+    "pydantic",
+]
+
+[dependency-groups]
+# pywrangler (CLI für Python Workers) und Test-Abhängigkeiten
+dev = [
+    "workers-py",
+    "pytest",
+    "httpx",
+]

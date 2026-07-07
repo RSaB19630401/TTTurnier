@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TT-Turnier</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root{ --blue:#12385f; --blue2:#0c2a48; --ball:#f97316; --ballDk:#ea580c; --line:#e2e8f0; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f1f5f9;color:#1e293b;font-variant-numeric:tabular-nums}
+  header{background:var(--blue);color:#fff}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 20px}
+  .top{display:flex;align-items:center;gap:12px;padding:14px 0}
+  .logo{width:34px;height:34px;border-radius:50%;background:var(--ball);display:grid;place-items:center;font-weight:800}
+  .tabs{display:flex;gap:4px}
+  .tab{padding:9px 14px;border:none;background:transparent;color:#cbd5e1;font-weight:600;font-size:14px;cursor:pointer;border-bottom:2px solid transparent}
+  .tab.on{color:#fff;border-color:var(--ball)}
+  main{padding:22px 0 60px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);margin-bottom:18px}
+  .card>h3{margin:0;padding:12px 18px;border-bottom:1px solid #f1f5f9;font-size:15px;display:flex;align-items:center;gap:8px}
+  .card>.body{padding:18px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  label{display:block;font-size:12px;color:#64748b;margin-bottom:4px;font-weight:500}
+  input,select{border:1px solid #cbd5e1;border-radius:8px;padding:7px 10px;font-size:14px;background:#fff;outline:none}
+  input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px #12385f22}
+  .btn{display:inline-flex;align-items:center;gap:6px;background:var(--ball);color:#fff;font-weight:600;font-size:14px;border:none;border-radius:9px;padding:8px 14px;cursor:pointer}
+  .btn:hover{background:var(--ballDk)} .btn:disabled{background:#cbd5e1;cursor:not-allowed}
+  .btn.ghost{background:#fff;color:#475569;border:1px solid var(--line);font-weight:500;font-size:13px;padding:6px 10px}
+  .btn.ghost:hover{border-color:#cbd5e1}
+  .btn.blue{background:var(--blue)} .btn.blue:hover{background:var(--blue2)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:6px 8px;font-weight:600}
+  td{padding:8px;border-top:1px solid #f1f5f9}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#eef2f7;color:#475569}
+  .list-item{display:flex;align-items:center;gap:10px;background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:6px}
+  .del{color:#94a3b8;background:none;border:none;cursor:pointer;font-size:14px} .del:hover{color:#e11d48}
+  .score{width:34px;text-align:center;border:1px solid #cbd5e1;border-radius:6px;padding:4px 0;font-size:13px;font-family:ui-monospace,monospace}
+  .badge{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;color:#fff;font-weight:700;font-size:12px}
+  .muted{color:#94a3b8} .win{color:#047857;font-weight:700}
+  .rankrow.up{background:#ecfdf5}
+  .modegrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .modeopt{border:1px solid var(--line);border-radius:9px;padding:10px;cursor:pointer;font-size:13px}
+  .modeopt.on{border-color:var(--ball);background:#fff7ed}
+  .modeopt.off{opacity:.5;cursor:not-allowed}
+  .modeopt .lab{font-weight:600} .modeopt .hint{color:#94a3b8;font-size:11px;margin-top:2px}
+  .flash{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;padding:8px 12px;border-radius:8px;font-size:13px;margin-bottom:10px}
+  .bracket{display:flex;gap:22px;overflow-x:auto;padding-bottom:8px}
+  .bcol{display:flex;flex-direction:column;justify-content:space-around;gap:12px;min-width:210px}
+  .bmatch{border:1px solid var(--line);border-radius:9px;background:#fff;overflow:hidden}
+  .bslot{padding:6px 10px;font-size:13px;display:flex;justify-content:space-between}
+  .bslot+.bslot{border-top:1px solid #f1f5f9}
+  .steps{display:flex;gap:8px;font-size:12px;color:#cbd5e1;margin-left:auto}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect} = React;
+const LET="ABCDEFGHIJKLMNOP";
+async function api(path,method="GET",body){
+  const r=await fetch("/api"+path,{method,headers:{"Content-Type":"application/json"},
+    body:body?JSON.stringify(body):undefined});
+  if(!r.ok){ const e=await r.json().catch(()=>({detail:r.statusText})); throw new Error(e.detail||"Fehler"); }
+  return r.json();
+}
+
+function App(){
+  const [tab,setTab]=useState("comp");
+  const [openComp,setOpenComp]=useState(null);
+  return <>
+    <header><div className="wrap">
+      <div className="top">
+        <div className="logo">🏓</div>
+        <div><div style={{fontSize:11,letterSpacing:2,color:"#ffffff99",textTransform:"uppercase"}}>Turnierleitung</div>
+          <div style={{fontWeight:800,fontSize:18}}>TT-Turnier</div></div>
+        <div className="tabs" style={{marginLeft:24}}>
+          {[["comp","Wettbewerbe"],["players","Spieler"],["clubs","Vereine"]].map(([k,l])=>
+            <button key={k} className={"tab"+(tab===k?" on":"")}
+              onClick={()=>{setTab(k);setOpenComp(null)}}>{l}</button>)}
+        </div>
+      </div>
+    </div></header>
+    <main><div className="wrap">
+      {tab==="clubs" && <Clubs/>}
+      {tab==="players" && <Players/>}
+      {tab==="comp" && (openComp
+        ? <CompDetail id={openComp} onBack={()=>setOpenComp(null)}/>
+        : <Comps onOpen={setOpenComp}/>)}
+    </div></main>
+  </>;
+}
+
+// ------------------------------------------------------------------ Vereine --
+function Clubs(){
+  const [items,setItems]=useState([]); const [name,setName]=useState(""); const [prefix,setPrefix]=useState("");
+  const load=()=>api("/clubs").then(setItems); useEffect(()=>{load()},[]);
+  const add=async()=>{ if(!name.trim())return; await api("/clubs","POST",{name:name.trim(),prefix:prefix.trim()});
+    setName("");setPrefix("");load(); };
+  const del=async id=>{ try{await api("/clubs/"+id,"DELETE");load();}catch(e){alert(e.message)} };
+  return <div className="card"><h3>Vereine</h3><div className="body">
+    <div className="row" style={{marginBottom:14}}>
+      <div><label>Kürzel</label><input value={prefix} style={{width:80}} onChange={e=>setPrefix(e.target.value)}/></div>
+      <div style={{flex:1}}><label>Vereinsname</label><input value={name} style={{width:"100%"}}
+        onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()}/></div>
+      <button className="btn" onClick={add}>+ Verein</button>
+    </div>
+    {items.length===0 && <div className="muted">Noch keine Vereine.</div>}
+    {items.map(c=><div key={c.id} className="list-item">
+      <span className="pill">{c.prefix||"—"}</span><b style={{flex:1}}>{c.name}</b>
+      <button className="del" onClick={()=>del(c.id)}>🗑</button></div>)}
+  </div></div>;
+}
+
+// ------------------------------------------------------------------- Spieler --
+function Players(){
+  const [items,setItems]=useState([]); const [clubs,setClubs]=useState([]);
+  const [f,setF]=useState({first_name:"",last_name:"",club_id:"",sex:""});
+  const load=()=>Promise.all([api("/players"),api("/clubs")]).then(([p,c])=>{setItems(p);setClubs(c)});
+  useEffect(()=>{load()},[]);
+  const add=async()=>{ if(!f.first_name.trim()&&!f.last_name.trim())return;
+    await api("/players","POST",{...f,club_id:f.club_id?Number(f.club_id):null});
+    setF({first_name:"",last_name:"",club_id:f.club_id,sex:""});load(); };
+  const del=async id=>{await api("/players/"+id,"DELETE");load()};
+  return <div className="card"><h3>Spieler</h3><div className="body">
+    <div className="row" style={{marginBottom:14}}>
+      <div><label>Vorname</label><input value={f.first_name} onChange={e=>setF({...f,first_name:e.target.value})}/></div>
+      <div><label>Nachname</label><input value={f.last_name} onChange={e=>setF({...f,last_name:e.target.value})}
+        onKeyDown={e=>e.key==="Enter"&&add()}/></div>
+      <div><label>Verein</label><select value={f.club_id} onChange={e=>setF({...f,club_id:e.target.value})}>
+        <option value="">—</option>{clubs.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+      <div><label>m/w</label><select value={f.sex} onChange={e=>setF({...f,sex:e.target.value})}>
+        <option value="">—</option><option value="m">m</option><option value="w">w</option></select></div>
+      <button className="btn" onClick={add}>+ Spieler</button>
+    </div>
+    <table><thead><tr><th>Name</th><th>Verein</th><th>m/w</th><th></th></tr></thead><tbody>
+      {items.map(p=><tr key={p.id}><td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
+        <td>{p.sex||"—"}</td><td style={{textAlign:"right"}}><button className="del" onClick={()=>del(p.id)}>🗑</button></td></tr>)}
+    </tbody></table>
+    {items.length===0 && <div className="muted">Noch keine Spieler.</div>}
+  </div></div>;
+}
+
+// -------------------------------------------------------------- Wettbewerbe --
+function Comps({onOpen}){
+  const [items,setItems]=useState([]); const [modes,setModes]=useState([]);
+  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3});
+  const load=()=>Promise.all([api("/competitions"),api("/modes")]).then(([c,m])=>{setItems(c);setModes(m)});
+  useEffect(()=>{load()},[]);
+  const create=async()=>{ if(!f.name.trim())return;
+    try{ const c=await api("/competitions","POST",{...f,name:f.name.trim()}); load(); onOpen(c.id); }
+    catch(e){alert(e.message)} };
+  const kind=modes.find(m=>m.key===f.mode)?.kind;
+  const showGroups=["group","group_ko"].includes(kind);
+  const showKO=["ko","group_ko"].includes(kind);
+  return <>
+    <div className="card"><h3>Neuer Wettbewerb</h3><div className="body">
+      <div className="row" style={{marginBottom:12}}>
+        <div style={{flex:1}}><label>Name</label><input style={{width:"100%"}} value={f.name}
+          onChange={e=>setF({...f,name:e.target.value})}/></div>
+      </div>
+      <label>Modus</label>
+      <div className="modegrid" style={{marginBottom:12}}>
+        {modes.map(m=><div key={m.key}
+          className={"modeopt"+(f.mode===m.key?" on":"")+(m.implemented?"":" off")}
+          onClick={()=>m.implemented&&setF({...f,mode:m.key})}>
+          <div className="lab">{m.label} {!m.implemented&&<span className="pill">geplant</span>}</div>
+          <div className="hint">{m.hint}</div></div>)}
+      </div>
+      <div className="row">
+        {showGroups && <div><label>Gruppen</label><input type="number" style={{width:80}} value={f.group_count}
+          onChange={e=>setF({...f,group_count:+e.target.value})}/></div>}
+        {kind==="group_ko" && <div><label>Aufsteiger/Gr.</label><input type="number" style={{width:90}} value={f.advance_per_group}
+          onChange={e=>setF({...f,advance_per_group:+e.target.value})}/></div>}
+        <div><label>Sätze b. Sieg</label><input type="number" style={{width:90}} value={f.sets_to_win}
+          onChange={e=>setF({...f,sets_to_win:+e.target.value})}/></div>
+        <div><label>Bälle/Satz</label><input type="number" style={{width:80}} value={f.points_per_set}
+          onChange={e=>setF({...f,points_per_set:+e.target.value})}/></div>
+        {showKO && <div><label>Sätze KO</label><input type="number" style={{width:80}} value={f.ko_sets_to_win}
+          onChange={e=>setF({...f,ko_sets_to_win:+e.target.value})}/></div>}
+        <button className="btn" onClick={create}>Anlegen</button>
+      </div>
+    </div></div>
+    <div className="card"><h3>Wettbewerbe</h3><div className="body">
+      {items.length===0 && <div className="muted">Noch keine Wettbewerbe.</div>}
+      {items.map(c=><div key={c.id} className="list-item" style={{cursor:"pointer"}} onClick={()=>onOpen(c.id)}>
+        <b style={{flex:1}}>{c.name}</b><span className="pill">{c.mode_label}</span>
+        <span className="pill">{c.status}</span><span className="muted">›</span></div>)}
+    </div></div>
+  </>;
+}
+
+// ----------------------------------------------------------- Wettbewerb-Detail
+function CompDetail({id,onBack}){
+  const [c,setC]=useState(null); const [players,setPlayers]=useState([]);
+  const [msg,setMsg]=useState(null);
+  const reload=()=>api("/competitions/"+id).then(setC);
+  useEffect(()=>{ reload(); api("/players").then(setPlayers); },[id]);
+  if(!c) return <div className="muted">lädt…</div>;
+  const flash=t=>{setMsg(t);setTimeout(()=>setMsg(null),6000)};
+  return <>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+      <button className="btn ghost" onClick={onBack}>‹ Zurück</button>
+      <b style={{fontSize:17}}>{c.name}</b><span className="pill">{c.mode_label}</span><span className="pill">{c.status}</span>
+    </div>
+    {msg && <div className="flash">{msg}</div>}
+    {c.status==="setup"
+      ? <Setup c={c} players={players} onDone={()=>{reload()}} flash={flash}/>
+      : <Play c={c} onChange={reload} flash={flash}/>}
+  </>;
+}
+
+function Setup({c,players,onDone,flash}){
+  const [sel,setSel]=useState({}); const [seed,setSeed]=useState({});
+  const toggle=(id)=>setSel(s=>({...s,[id]:!s[id]}));
+  const tSeed=(id)=>setSeed(s=>({...s,[id]:!s[id]}));
+  const chosen=players.filter(p=>sel[p.id]);
+  const save=async()=>{
+    await api(`/competitions/${c.id}/entries`,"PUT",
+      {player_ids:chosen.map(p=>p.id),seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id)});
+    flash("Teilnehmer gespeichert ("+chosen.length+"). Jetzt auslosen.");
+  };
+  const doDraw=async()=>{
+    await api(`/competitions/${c.id}/entries`,"PUT",
+      {player_ids:chosen.map(p=>p.id),seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id)});
+    try{
+      const r=await api(`/competitions/${c.id}/draw`,"POST");
+      const conf=r.conflicts||[];
+      flash(conf.length? `Ausgelost. ${conf.length} unvermeidbare Vereinskonflikte verbleiben.` : "Ausgelost – ohne Vereinskonflikte.");
+      onDone();
+    }catch(e){flash("Auslosung nicht möglich: "+e.message)}
+  };
+  return <div className="card"><h3>Teilnehmer & Setzung</h3><div className="body">
+    <div className="muted" style={{marginBottom:8,fontSize:13}}>Ankreuzen, wer mitspielt. „Gesetzt" hält Spieler bei der Auslosung getrennt.</div>
+    <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th><th>Gesetzt</th></tr></thead><tbody>
+      {players.map(p=><tr key={p.id}>
+        <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>toggle(p.id)}/></td>
+        <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
+        <td>{sel[p.id] && <input type="checkbox" checked={!!seed[p.id]} onChange={()=>tSeed(p.id)}/>}</td>
+      </tr>)}
+    </tbody></table>
+    {players.length===0 && <div className="muted">Lege zuerst unter „Spieler" welche an.</div>}
+    <div style={{marginTop:14,display:"flex",gap:8}}>
+      <button className="btn ghost" onClick={save} disabled={chosen.length<2}>Teilnehmer speichern</button>
+      <button className="btn" onClick={doDraw} disabled={chosen.length<2}>Auslosen ({chosen.length})</button>
+    </div>
+  </div></div>;
+}
+
+function SetEntry({sets,maxSets,onSave,walkover}){
+  const [rows,setRows]=useState(sets&&sets.length?sets.map(s=>[""+s[0],""+s[1]]):[["",""]]);
+  const [wo,setWo]=useState(walkover||null);
+  const upd=(i,side,v)=>{const r=rows.map(x=>[...x]);r[i][side]=v.replace(/[^0-9]/g,"").slice(0,2);setRows(r)};
+  return <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+    {!wo && rows.map((s,i)=><span key={i}>
+      <input className="score" value={s[0]} onChange={e=>upd(i,0,e.target.value)}/>
+      <span className="muted">:</span>
+      <input className="score" value={s[1]} onChange={e=>upd(i,1,e.target.value)}/></span>)}
+    {!wo && rows.length<maxSets && <button className="del" onClick={()=>setRows([...rows,["",""]])}>+ Satz</button>}
+    {wo && <span className="pill">kampflos {wo==="home"?"◀":"▶"}</span>}
+    <button className="btn ghost" onClick={()=>{setWo(wo==="home"?null:"home")}}>w.o.◀</button>
+    <button className="btn ghost" onClick={()=>{setWo(wo==="away"?null:"away")}}>▶w.o.</button>
+    <button className="btn blue" onClick={()=>onSave(
+      wo?{walkover:wo}:{sets:rows.filter(s=>s[0]!==""||s[1]!=="").map(s=>[+s[0]||0,+s[1]||0])})}>OK</button>
+  </div>;
+}
+
+function Play({c,onChange,flash}){
+  const [matches,setMatches]=useState([]); const [rank,setRank]=useState(null); const [br,setBr]=useState(null);
+  const [grp,setGrp]=useState(0); const [edit,setEdit]=useState(null);
+  const hasGroups=["group","group_ko"].includes(c.kind);
+  const hasKO=["ko","group_ko"].includes(c.kind);
+  const load=()=>{
+    const jobs=[];
+    if(hasGroups){ jobs.push(api(`/competitions/${c.id}/matches`).then(setMatches),
+                              api(`/competitions/${c.id}/ranking`).then(setRank)); }
+    if(hasKO){ jobs.push(api(`/competitions/${c.id}/bracket`).then(setBr)); }
+    return Promise.all(jobs);
+  };
+  useEffect(()=>{load()},[c.status]);
+  const saveResult=async(mid,body)=>{ await api(`/matches/${mid}/result`,"POST",body); setEdit(null); await load(); };
+  const buildKO=async()=>{ try{const r=await api(`/competitions/${c.id}/build_ko`,"POST");
+    flash(r.conflicts?.length?`KO ausgelost, ${r.conflicts.length} unvermeidbare Konflikte.`:"KO ausgelost.");
+    onChange();}catch(e){flash(e.message)} };
+  const maxG=c.sets_to_win*2-1, maxK=c.ko_sets_to_win*2-1;
+  const groupMatches=matches.filter(m=>m.group_no===grp);
+  const groupsDone=matches.length>0 && matches.every(m=>m.complete);
+
+  return <>
+    {hasGroups && rank && <>
+      {c.group_count>1 && <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+        {rank.groups.map((g,gi)=>{
+          const tot=matches.filter(m=>m.group_no===gi).length;
+          const dn=matches.filter(m=>m.group_no===gi&&m.complete).length;
+          return <button key={gi} className={"btn "+(grp===gi?"blue":"ghost")} onClick={()=>setGrp(gi)}>
+            Gruppe {LET[gi]} {dn}/{tot}</button>;})}
+      </div>}
+      <div className="card"><h3>Rangliste – Gruppe {LET[grp]}
+        {rank.groups[grp]?.tie_break_used && <span className="pill" style={{marginLeft:8}}>Tie-Break</span>}</h3>
+        <div className="body"><table>
+          <thead><tr><th>#</th><th>Name</th><th>Sp</th><th>S:N</th><th>Sätze</th><th>SatzQ</th><th>Bälle</th><th>BallQ</th><th>Pkt</th></tr></thead>
+          <tbody>{(rank.groups[grp]?.rows||[]).map(r=>
+            <tr key={r.entry} className={"rankrow"+(r.advances?" up":"")}>
+              <td><span className="badge" style={{background:r.advances?"#059669":"#94a3b8"}}>{r.rank}</span></td>
+              <td><b>{r.name}</b></td><td className="muted">{r.played}</td><td>{r.wins}:{r.played-r.wins}</td>
+              <td className="muted">{r.gw}:{r.gl}</td><td><b>{r.set_ratio===null?"∞":r.set_ratio}</b></td>
+              <td className="muted">{r.pw}:{r.pl}</td><td>{r.point_ratio===null?"∞":r.point_ratio}</td>
+              <td style={{fontWeight:800,color:"var(--blue)"}}>{r.mp}</td></tr>)}
+          </tbody></table>
+          <div className="muted" style={{fontSize:11,marginTop:6}}>Q = Quotient (gewonnen:verloren) · grün = Aufstieg</div>
+        </div></div>
+      <div className="card"><h3>Spielplan – Gruppe {LET[grp]}</h3><div className="body">
+        {groupMatches.map(m=><div key={m.id} className="list-item">
+          <span className="muted" style={{width:34,fontFamily:"monospace"}}>R{m.round_no}</span>
+          <div style={{flex:1,textAlign:"right"}}><span className={m.complete&&m.winner===m.home?"win":""}>{m.home_name}</span></div>
+          <span className="muted">vs</span>
+          <div style={{flex:1}}><span className={m.complete&&m.winner===m.away?"win":""}>{m.away_name}</span></div>
+          {edit===m.id
+            ? <SetEntry sets={m.sets} maxSets={maxG} walkover={m.walkover} onSave={b=>saveResult(m.id,b)}/>
+            : <button className="btn ghost" onClick={()=>setEdit(m.id)}>
+                {m.complete? m.sets.map(s=>s.join(":")).join("  ")||"w.o." : "Ergebnis"}</button>}
+        </div>)}
+      </div></div>
+      {c.kind==="group_ko" && !br?.rounds && <button className="btn" disabled={!groupsDone} onClick={buildKO}>
+        KO-Runde auslosen {groupsDone?"":"(erst alle Gruppenspiele)"}</button>}
+    </>}
+
+    {hasKO && br?.rounds>0 && <div className="card"><h3>KO-Baum</h3><div className="body">
+      {br.champion_name && <div style={{background:"linear-gradient(90deg,var(--blue2),var(--blue))",color:"#fff",
+        padding:"12px 16px",borderRadius:10,marginBottom:14}}>
+        <span style={{color:"var(--ball)",fontWeight:800}}>🏆 Sieger:</span> <b style={{fontSize:18}}>{br.champion_name}</b></div>}
+      <div className="bracket">
+        {Array.from({length:br.rounds}).map((_,r)=>{
+          const ms=br.matches.filter(m=>m.round===r).sort((a,b)=>a.index-b.index);
+          const nm=(left=>left===1?"Finale":left===2?"Halbfinale":left===3?"Viertelfinale":left===4?"Achtelfinale":"Runde "+(r+1))(br.rounds-r);
+          return <div key={r} className="bcol">
+            <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:1,color:"var(--blue)",fontWeight:700,textAlign:"center"}}>{nm}</div>
+            {ms.map(m=><div key={m.id} className="bmatch">
+              <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name||<i className="muted">wartet…</i>}</span></div>
+              <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name||<i className="muted">wartet…</i>}</span></div>
+              {m.bye
+                ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>Freilos</div>
+                : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
+                    {edit===m.id
+                      ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} onSave={b=>saveResult(m.id,b)}/>
+                      : <button className="btn ghost" onClick={()=>setEdit(m.id)}>
+                          {m.winner? (m.sets.map(s=>s.join(":")).join(" ")||"w.o.") : "Ergebnis"}</button>}
+                  </div>)}
+            </div>)}
+          </div>;
+        })}
+      </div>
+    </div></div>}
+  </>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

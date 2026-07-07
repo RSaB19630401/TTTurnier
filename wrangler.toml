@@ -1,0 +1,15 @@
+name = "tt-turnier"
+main = "src/entry.py"
+compatibility_date = "2026-07-06"
+compatibility_flags = ["python_workers"]
+
+# Statisches Frontend (index.html) wird direkt ausgeliefert; /api/* geht an den Worker.
+[assets]
+directory = "./public"
+
+# D1-Datenbank. database_id nach `wrangler d1 create tt-turnier` hier eintragen.
+[[d1_databases]]
+binding = "DB"
+database_name = "tt-turnier"
+database_id = "HIER_DEINE_D1_DATABASE_ID_EINTRAGEN"
+migrations_dir = "migrations"
