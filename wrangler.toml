@@ -11,5 +11,5 @@ directory = "./public"
 [[d1_databases]]
 binding = "DB"
 database_name = "tt-turnier"
-database_id = "HIER_DEINE_D1_DATABASE_ID_EINTRAGEN"
+database_id = "ee88f8be-fda7-4f35-a270-ba34d7cfa43e"
 migrations_dir = "migrations"
