@@ -23,14 +23,24 @@ async def get_db(request: Request) -> Database:
 
 
 # ------------------------------------------------------------- Hilfsfunktionen -
-def outcome(walkover, sets, home_id, away_id, sets_to_win, points_per_set):
+def outcome(score_mode, walkover, sets, home_id, away_id, sets_to_win, points_per_set):
     if walkover in ("home", "away"):
         hw = walkover == "home"
         return {"complete": True, "walkover": True,
                 "winner": home_id if hw else away_id,
                 "hs": sets_to_win if hw else 0, "as": 0 if hw else sets_to_win,
-                "hp": sets_to_win * points_per_set if hw else 0,
-                "ap": 0 if hw else sets_to_win * points_per_set}
+                "hp": (sets_to_win * points_per_set if hw else 0) if score_mode == "points" else 0,
+                "ap": (0 if hw else sets_to_win * points_per_set) if score_mode == "points" else 0}
+    if score_mode == "sets":
+        # In diesem Modus enthält `sets` genau einen Eintrag [Sätze_Heim, Sätze_Gast].
+        hs = as_ = 0
+        if sets:
+            hs, as_ = int(sets[0]["home_points"]), int(sets[0]["away_points"])
+        complete = hs >= sets_to_win or as_ >= sets_to_win
+        winner = home_id if hs >= sets_to_win else (away_id if as_ >= sets_to_win else None)
+        # Keine Ballpunkte -> hp/ap = 0 (Ballpunktquotient entfällt, es folgt das Los).
+        return {"complete": complete, "walkover": False, "winner": winner,
+                "hs": hs, "as": as_, "hp": 0, "ap": 0}
     hs = as_ = hp = ap = 0
     for s in sets:
         h, a = s["home_points"], s["away_points"]
@@ -86,7 +96,7 @@ def comp_dto(c: dict, entries=None):
          "sets_to_win": c["sets_to_win"], "points_per_set": c["points_per_set"],
          "group_count": effective_group_count(c["mode"], c["group_count"]),
          "advance_per_group": c["advance_per_group"], "ko_sets_to_win": c["ko_sets_to_win"],
-         "status": c["status"]}
+         "status": c["status"], "score_mode": c["score_mode"]}
     if entries is not None:
         d["entries"] = [{"id": e["id"], "seeded": e["seeded"], "seed_no": e["seed_no"],
                          "group_no": e["group_no"], "bracket_slot": e["bracket_slot"],
@@ -167,6 +177,7 @@ class CompIn(BaseModel):
     name: str; mode: str
     sets_to_win: int = 3; points_per_set: int = 11
     group_count: int = 1; advance_per_group: int = 2; ko_sets_to_win: int = 3
+    score_mode: str = "points"
 
 
 @app.get("/api/modes")
@@ -186,11 +197,13 @@ async def create_comp(body: CompIn, db=Depends(get_db)):
         raise HTTPException(400, "Unbekannter Modus")
     if not MODES[body.mode]["implemented"]:
         raise HTTPException(400, f"Modus „{MODES[body.mode]['label']}“ ist geplant, aber noch nicht aktiv.")
+    if body.score_mode not in ("points", "sets"):
+        raise HTTPException(400, "Ungültiger Wertungsmodus.")
     cid = await db.execute(
-        """INSERT INTO competitions (name,mode,sets_to_win,points_per_set,group_count,advance_per_group,ko_sets_to_win,status)
-           VALUES (?,?,?,?,?,?,?, 'setup')""",
+        """INSERT INTO competitions (name,mode,sets_to_win,points_per_set,group_count,advance_per_group,ko_sets_to_win,status,score_mode)
+           VALUES (?,?,?,?,?,?,?, 'setup', ?)""",
         (body.name, body.mode, body.sets_to_win, body.points_per_set,
-         body.group_count, body.advance_per_group, body.ko_sets_to_win))
+         body.group_count, body.advance_per_group, body.ko_sets_to_win, body.score_mode))
     c = await get_comp(db, cid)
     return comp_dto(c, entries=[])
 
@@ -323,7 +336,7 @@ async def _ko_state(db, c):
             h, a = winner(r - 1, 2 * i), winner(r - 1, 2 * i + 1)
         if h is None or a is None:
             return None
-        o = outcome(by[(r, i)]["walkover"], by[(r, i)]["sets"], h, a, stw, pps)
+        o = outcome(c["score_mode"], by[(r, i)]["walkover"], by[(r, i)]["sets"], h, a, stw, pps)
         return o["winner"] if o["complete"] else None
 
     occ, winners = {}, {}
@@ -353,13 +366,23 @@ async def post_result(mid: int, body: ResultIn, db=Depends(get_db)):
 
     await db.execute("DELETE FROM match_sets WHERE match_id=?", (mid,))
     walkover = body.walkover if body.walkover in ("home", "away") else None
-    if not walkover and body.sets:
-        for i, (h, a) in enumerate(body.sets):
-            await db.execute("INSERT INTO match_sets (match_id,set_no,home_points,away_points) VALUES (?,?,?,?)",
-                             (mid, i + 1, int(h), int(a)))
     stw = c["ko_sets_to_win"] if m["phase"] == "ko" else c["sets_to_win"]
+    if not walkover and body.sets:
+        if c["score_mode"] == "sets":
+            # Genau ein Satzergebnis erwartet: [Sätze_Heim, Sätze_Gast]
+            hs, as_ = int(body.sets[0][0]), int(body.sets[0][1])
+            win, lose = max(hs, as_), min(hs, as_)
+            if win != stw or lose < 0 or lose >= stw or hs == as_:
+                raise HTTPException(400,
+                    f"Ungültiges Satzergebnis: Sieger muss genau {stw} Sätze haben, Verlierer 0 bis {stw - 1}.")
+            await db.execute("INSERT INTO match_sets (match_id,set_no,home_points,away_points) VALUES (?,?,?,?)",
+                             (mid, 1, hs, as_))
+        else:
+            for i, (h, a) in enumerate(body.sets):
+                await db.execute("INSERT INTO match_sets (match_id,set_no,home_points,away_points) VALUES (?,?,?,?)",
+                                 (mid, i + 1, int(h), int(a)))
     sets = await db.query("SELECT * FROM match_sets WHERE match_id=? ORDER BY set_no", (mid,))
-    o = outcome(walkover, sets, m["home_entry_id"], m["away_entry_id"], stw, c["points_per_set"])
+    o = outcome(c["score_mode"], walkover, sets, m["home_entry_id"], m["away_entry_id"], stw, c["points_per_set"])
     await db.execute("UPDATE matches SET walkover=?, status=? WHERE id=?",
                      (walkover, "done" if o["complete"] else "pending", mid))
     return {"ok": True, "complete": o["complete"], "winner": o["winner"]}
@@ -375,7 +398,7 @@ async def list_group_matches(cid: int, db=Depends(get_db)):
     for m in ms:
         if m["phase"] != "group":
             continue
-        o = outcome(m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
+        o = outcome(c["score_mode"], m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
                     c["sets_to_win"], c["points_per_set"])
         out.append({"id": m["id"], "round_no": m["round_no"], "group_no": m["group_no"],
                     "home": m["home_entry_id"], "away": m["away_entry_id"],
@@ -400,7 +423,7 @@ async def ranking(cid: int, db=Depends(get_db)):
         for m in ms:
             if m["phase"] != "group" or m["group_no"] != gi:
                 continue
-            o = outcome(m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
+            o = outcome(c["score_mode"], m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
                         c["sets_to_win"], c["points_per_set"])
             if o["complete"]:
                 results.append(R.MatchResult(m["home_entry_id"], m["away_entry_id"],
@@ -455,7 +478,7 @@ async def build_ko(cid: int, seed: int | None = None, db=Depends(get_db)):
         raise HTTPException(400, "KO wurde bereits erzeugt.")
     for m in ms:
         if m["phase"] == "group":
-            o = outcome(m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
+            o = outcome(c["score_mode"], m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
                         c["sets_to_win"], c["points_per_set"])
             if not o["complete"]:
                 raise HTTPException(400, "Es sind noch nicht alle Gruppenspiele gespielt.")
