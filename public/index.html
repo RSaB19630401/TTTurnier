@@ -368,9 +368,20 @@ function Play({c,onChange,flash}){
   };
   useEffect(()=>{load()},[c.status]);
   const saveResult=async(mid,body)=>{ await api(`/matches/${mid}/result`,"POST",body); setEdit(null); await load(); };
-  const buildKO=async()=>{ try{const r=await api(`/competitions/${c.id}/build_ko`,"POST");
+  const [koSel,setKoSel]=useState(null); const [koPick,setKoPick]=useState({});
+  const buildKO=async()=>{ try{
+    const r=await api(`/competitions/${c.id}/build_ko`,"POST",{});
+    if(r.needs_selection){ setKoSel(r); setKoPick({}); return; }
     flash(r.conflicts?.length?`KO ausgelost, ${r.conflicts.length} unvermeidbare Konflikte.`:"KO ausgelost.");
-    onChange();}catch(e){flash(e.message)} };
+    onChange();
+  }catch(e){flash(e.message)} };
+  const confirmKO=async()=>{
+    const qualifiers=Object.keys(koPick).filter(k=>koPick[k]).map(Number);
+    try{ const r=await api(`/competitions/${c.id}/build_ko?seed=`+Date.now()%100000,"POST",{qualifiers});
+      setKoSel(null);
+      flash(r.conflicts?.length?`KO ausgelost, ${r.conflicts.length} unvermeidbare Konflikte.`:"KO ausgelost.");
+      onChange();
+    }catch(e){flash(e.message)} };
   const maxG=c.sets_to_win*2-1, maxK=c.ko_sets_to_win*2-1;
   const groupMatches=matches.filter(m=>m.group_no===grp);
   const groupsDone=matches.length>0 && matches.every(m=>m.complete);
@@ -411,8 +422,29 @@ function Play({c,onChange,flash}){
                 {m.sets.map(s=>s.join(":")).join("  ")||"w.o."}</button>}
         </div>)}
       </div></div>
-      {c.kind==="group_ko" && !br?.rounds && <button className="btn" disabled={!groupsDone} onClick={buildKO}>
+      {c.kind==="group_ko" && !br?.rounds && !koSel && <button className="btn" disabled={!groupsDone} onClick={buildKO}>
         KO-Runde auslosen {groupsDone?"":"(erst alle Gruppenspiele)"}</button>}
+      {koSel && <div className="card"><h3>Aufsteiger für die KO-Runde wählen</h3><div className="body">
+        <div className="muted" style={{marginBottom:10,fontSize:13}}>
+          {koSel.safe.length} Spieler stehen bereits fest, regulär geplant sind {koSel.regular_target} Plätze.
+          Hake an, wer zusätzlich weiterkommt – bei „Los" entscheidest du einen echten Gleichstand, mit den besten Dritten füllst du freie Plätze auf. Der KO-Baum passt seine Größe automatisch an (Gruppenerste erhalten ggf. Freilose).
+        </div>
+        {koSel.safe.length>0 && <div style={{marginBottom:10,fontSize:13}}>
+          <b>Sicher qualifiziert:</b> <span className="muted">{koSel.safe.map(s=>s.name).join(", ")}</span></div>}
+        <table><thead><tr><th>wählen</th><th>Gruppe</th><th>Platz</th><th>Name</th><th>Pkt</th><th>Sätze</th><th>Grund</th></tr></thead>
+          <tbody>{koSel.candidates.map(x=>
+            <tr key={x.entry}>
+              <td><input type="checkbox" checked={!!koPick[x.entry]}
+                onChange={()=>setKoPick(p=>({...p,[x.entry]:!p[x.entry]}))}/></td>
+              <td>Gr {LET[x.group]}</td><td>{x.rank}</td><td><b>{x.name}</b></td>
+              <td style={{fontWeight:700,color:"var(--blue)"}}>{x.mp}</td><td className="muted">{x.gw}:{x.gl}</td>
+              <td><span className="pill">{x.reason==="patt"?"Los (Gleichstand)":"bester Dritter"}</span></td></tr>)}
+          </tbody></table>
+        <div style={{marginTop:14,display:"flex",gap:8}}>
+          <button className="btn" onClick={confirmKO}>KO auslosen</button>
+          <button className="btn ghost" onClick={()=>setKoSel(null)}>Abbrechen</button>
+        </div>
+      </div></div>}
     </>}
 
     {hasKO && br?.rounds>0 && <div className="card"><h3>KO-Baum</h3><div className="body">
