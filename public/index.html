@@ -165,7 +165,7 @@ function Players(){
 // -------------------------------------------------------------- Wettbewerbe --
 function Comps({onOpen}){
   const [items,setItems]=useState([]); const [modes,setModes]=useState([]);
-  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3});
+  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3,score_mode:"points"});
   const load=()=>Promise.all([api("/competitions"),api("/modes")]).then(([c,m])=>{setItems(c);setModes(m)});
   useEffect(()=>{load()},[]);
   const create=async()=>{ if(!f.name.trim())return;
@@ -198,8 +198,10 @@ function Comps({onOpen}){
           onChange={e=>setF({...f,advance_per_group:+e.target.value})}/></div>}
         <div><label>Sätze b. Sieg</label><input type="number" style={{width:90}} value={f.sets_to_win}
           onChange={e=>setF({...f,sets_to_win:+e.target.value})}/></div>
-        <div><label>Bälle/Satz</label><input type="number" style={{width:80}} value={f.points_per_set}
-          onChange={e=>setF({...f,points_per_set:+e.target.value})}/></div>
+        <div><label>Wertung</label><select value={f.score_mode} onChange={e=>setF({...f,score_mode:e.target.value})}>
+          <option value="points">Ballpunkte je Satz</option><option value="sets">nur Sätze</option></select></div>
+        {f.score_mode==="points" && <div><label>Bälle/Satz</label><input type="number" style={{width:80}} value={f.points_per_set}
+          onChange={e=>setF({...f,points_per_set:+e.target.value})}/></div>}
         {showKO && <div><label>Sätze KO</label><input type="number" style={{width:80}} value={f.ko_sets_to_win}
           onChange={e=>setF({...f,ko_sets_to_win:+e.target.value})}/></div>}
         <button className="btn" onClick={create}>Anlegen</button>
@@ -273,21 +275,36 @@ function Setup({c,players,onDone,flash}){
   </div></div>;
 }
 
-function SetEntry({sets,maxSets,onSave,walkover}){
+function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
+  const setsOnly = scoreMode==="sets";
   const [rows,setRows]=useState(sets&&sets.length?sets.map(s=>[""+s[0],""+s[1]]):[["",""]]);
   const [wo,setWo]=useState(walkover||null);
   const upd=(i,side,v)=>{const r=rows.map(x=>[...x]);r[i][side]=v.replace(/[^0-9]/g,"").slice(0,2);setRows(r)};
+  const save=()=>{
+    if(wo){ onSave({walkover:wo}); return; }
+    if(setsOnly){
+      const h=+rows[0][0]||0, a=+rows[0][1]||0, win=Math.max(h,a), lose=Math.min(h,a);
+      if(win!==setsToWin || lose>=setsToWin || h===a){
+        alert(`Ungültiges Satzergebnis: Sieger muss genau ${setsToWin} Sätze haben, Verlierer 0 bis ${setsToWin-1}.`); return;
+      }
+      onSave({sets:[[h,a]]}); return;
+    }
+    onSave({sets:rows.filter(s=>s[0]!==""||s[1]!=="").map(s=>[+s[0]||0,+s[1]||0])});
+  };
   return <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-    {!wo && rows.map((s,i)=><span key={i}>
+    {!wo && setsOnly && <span title="Sätze Heim : Gast">
+      <input className="score" value={rows[0][0]} onChange={e=>upd(0,0,e.target.value)}/>
+      <span className="muted"> Sätze : </span>
+      <input className="score" value={rows[0][1]} onChange={e=>upd(0,1,e.target.value)}/></span>}
+    {!wo && !setsOnly && rows.map((s,i)=><span key={i}>
       <input className="score" value={s[0]} onChange={e=>upd(i,0,e.target.value)}/>
       <span className="muted">:</span>
       <input className="score" value={s[1]} onChange={e=>upd(i,1,e.target.value)}/></span>)}
-    {!wo && rows.length<maxSets && <button className="del" onClick={()=>setRows([...rows,["",""]])}>+ Satz</button>}
+    {!wo && !setsOnly && rows.length<maxSets && <button className="del" onClick={()=>setRows([...rows,["",""]])}>+ Satz</button>}
     {wo && <span className="pill">kampflos {wo==="home"?"◀":"▶"}</span>}
     <button className="btn ghost" onClick={()=>{setWo(wo==="home"?null:"home")}}>w.o.◀</button>
     <button className="btn ghost" onClick={()=>{setWo(wo==="away"?null:"away")}}>▶w.o.</button>
-    <button className="btn blue" onClick={()=>onSave(
-      wo?{walkover:wo}:{sets:rows.filter(s=>s[0]!==""||s[1]!=="").map(s=>[+s[0]||0,+s[1]||0])})}>OK</button>
+    <button className="btn blue" onClick={save}>OK</button>
   </div>;
 }
 
@@ -324,13 +341,14 @@ function Play({c,onChange,flash}){
       <div className="card"><h3>Rangliste – Gruppe {LET[grp]}
         {rank.groups[grp]?.tie_break_used && <span className="pill" style={{marginLeft:8}}>Tie-Break</span>}</h3>
         <div className="body"><table>
-          <thead><tr><th>#</th><th>Name</th><th>Sp</th><th>S:N</th><th>Sätze</th><th>SatzQ</th><th>Bälle</th><th>BallQ</th><th>Pkt</th></tr></thead>
+          <thead><tr><th>#</th><th>Name</th><th>Sp</th><th>S:N</th><th>Sätze</th><th>SatzQ</th>
+            {c.score_mode!=="sets" && <><th>Bälle</th><th>BallQ</th></>}<th>Pkt</th></tr></thead>
           <tbody>{(rank.groups[grp]?.rows||[]).map(r=>
             <tr key={r.entry} className={"rankrow"+(r.advances?" up":"")}>
               <td><span className="badge" style={{background:r.advances?"#059669":"#94a3b8"}}>{r.rank}</span></td>
               <td><b>{r.name}</b></td><td className="muted">{r.played}</td><td>{r.wins}:{r.played-r.wins}</td>
               <td className="muted">{r.gw}:{r.gl}</td><td><b>{r.set_ratio===null?"∞":r.set_ratio}</b></td>
-              <td className="muted">{r.pw}:{r.pl}</td><td>{r.point_ratio===null?"∞":r.point_ratio}</td>
+              {c.score_mode!=="sets" && <><td className="muted">{r.pw}:{r.pl}</td><td>{r.point_ratio===null?"∞":r.point_ratio}</td></>}
               <td style={{fontWeight:800,color:"var(--blue)"}}>{r.mp}</td></tr>)}
           </tbody></table>
           <div className="muted" style={{fontSize:11,marginTop:6}}>Q = Quotient (gewonnen:verloren) · grün = Aufstieg</div>
@@ -342,7 +360,7 @@ function Play({c,onChange,flash}){
           <span className="muted">vs</span>
           <div style={{flex:1}}><span className={m.complete&&m.winner===m.away?"win":""}>{m.away_name}</span></div>
           {edit===m.id
-            ? <SetEntry sets={m.sets} maxSets={maxG} walkover={m.walkover} onSave={b=>saveResult(m.id,b)}/>
+            ? <SetEntry sets={m.sets} maxSets={maxG} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(m.id,b)}/>
             : <button className="btn ghost" onClick={()=>setEdit(m.id)}>
                 {m.complete? m.sets.map(s=>s.join(":")).join("  ")||"w.o." : "Ergebnis"}</button>}
         </div>)}
@@ -368,7 +386,7 @@ function Play({c,onChange,flash}){
                 ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>Freilos</div>
                 : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
                     {edit===m.id
-                      ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} onSave={b=>saveResult(m.id,b)}/>
+                      ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
                       : <button className="btn ghost" onClick={()=>setEdit(m.id)}>
                           {m.winner? (m.sets.map(s=>s.join(":")).join(" ")||"w.o.") : "Ergebnis"}</button>}
                   </div>)}
