@@ -96,7 +96,8 @@ def comp_dto(c: dict, entries=None):
          "sets_to_win": c["sets_to_win"], "points_per_set": c["points_per_set"],
          "group_count": effective_group_count(c["mode"], c["group_count"]),
          "advance_per_group": c["advance_per_group"], "ko_sets_to_win": c["ko_sets_to_win"],
-         "status": c["status"], "score_mode": c["score_mode"]}
+         "status": c["status"], "score_mode": c["score_mode"],
+         "competition_type": c["competition_type"], "pairing": c["pairing"]}
     if entries is not None:
         d["entries"] = [{"id": e["id"], "seeded": e["seeded"], "seed_no": e["seed_no"],
                          "group_no": e["group_no"], "bracket_slot": e["bracket_slot"],
@@ -178,6 +179,8 @@ class CompIn(BaseModel):
     sets_to_win: int = 3; points_per_set: int = 11
     group_count: int = 1; advance_per_group: int = 2; ko_sets_to_win: int = 3
     score_mode: str = "points"
+    competition_type: str = "single"     # single | double
+    pairing: str | None = None           # bei double: fixed | draw
 
 
 @app.get("/api/modes")
@@ -199,11 +202,19 @@ async def create_comp(body: CompIn, db=Depends(get_db)):
         raise HTTPException(400, f"Modus „{MODES[body.mode]['label']}“ ist geplant, aber noch nicht aktiv.")
     if body.score_mode not in ("points", "sets"):
         raise HTTPException(400, "Ungültiger Wertungsmodus.")
+    ctype = body.competition_type if body.competition_type in ("single", "double") else "single"
+    pairing = None
+    if ctype == "double":
+        if body.mode != "ko":
+            raise HTTPException(400, "Doppel ist derzeit nur als Einfach-KO verfügbar.")
+        pairing = body.pairing if body.pairing in ("fixed", "draw") else None
+        if pairing is None:
+            raise HTTPException(400, "Bitte ein Paarbildungs-Verfahren wählen (feste Paare oder auslosen).")
     cid = await db.execute(
-        """INSERT INTO competitions (name,mode,sets_to_win,points_per_set,group_count,advance_per_group,ko_sets_to_win,status,score_mode)
-           VALUES (?,?,?,?,?,?,?, 'setup', ?)""",
+        """INSERT INTO competitions (name,mode,sets_to_win,points_per_set,group_count,advance_per_group,ko_sets_to_win,status,score_mode,competition_type,pairing)
+           VALUES (?,?,?,?,?,?,?, 'setup', ?,?,?)""",
         (body.name, body.mode, body.sets_to_win, body.points_per_set,
-         body.group_count, body.advance_per_group, body.ko_sets_to_win, body.score_mode))
+         body.group_count, body.advance_per_group, body.ko_sets_to_win, body.score_mode, ctype, pairing))
     c = await get_comp(db, cid)
     return comp_dto(c, entries=[])
 
@@ -248,9 +259,91 @@ async def set_participants(cid: int, body: ParticipantsIn, db=Depends(get_db)):
     return comp_dto(c, entries=await load_entries(db, cid))
 
 
+# ---- Doppel: Paarbildung ------------------------------------------------------
+async def _delete_entries(db, cid):
+    await db.execute("DELETE FROM entry_members WHERE entry_id IN (SELECT id FROM entries WHERE competition_id=?)", (cid,))
+    await db.execute("DELETE FROM entries WHERE competition_id=?", (cid,))
+
+
+class PairsIn(BaseModel):
+    pairs: list[list[int]]        # [[player1, player2], ...]
+    seeded: list[int] = []        # Indizes gesetzter Paare
+
+
+@app.put("/api/competitions/{cid}/pairs")
+async def set_pairs(cid: int, body: PairsIn, db=Depends(get_db)):
+    c = await get_comp(db, cid)
+    if c["competition_type"] != "double" or c["pairing"] != "fixed":
+        raise HTTPException(400, "Nur für Doppel mit festen Paaren.")
+    if c["status"] != "setup":
+        raise HTTPException(400, "Paare sind nach der Auslosung fixiert.")
+    seen = set()
+    for pr in body.pairs:
+        if len(pr) != 2 or pr[0] == pr[1]:
+            raise HTTPException(400, "Jedes Doppel braucht genau zwei verschiedene Spieler.")
+        for pid in pr:
+            if pid in seen:
+                raise HTTPException(400, "Ein Spieler darf nur in einem Doppel stehen.")
+            seen.add(pid)
+    await _delete_entries(db, cid)
+    for idx, pr in enumerate(body.pairs):
+        eid = await db.execute("INSERT INTO entries (competition_id,seeded) VALUES (?,?)",
+                               (cid, 1 if idx in set(body.seeded) else 0))
+        for oi, pid in enumerate(pr):
+            await db.execute("INSERT INTO entry_members (entry_id,player_id,order_index) VALUES (?,?,?)", (eid, pid, oi))
+    return comp_dto(c, entries=await load_entries(db, cid))
+
+
+@app.post("/api/competitions/{cid}/draw_partners")
+async def draw_partners(cid: int, seed: int | None = None, db=Depends(get_db)):
+    c = await get_comp(db, cid)
+    if c["competition_type"] != "double" or c["pairing"] != "draw":
+        raise HTTPException(400, "Nur für Doppel mit Partnerauslosung.")
+    if c["status"] != "setup":
+        raise HTTPException(400, "Nach der Auslosung nicht mehr möglich.")
+    rows = await db.query(
+        """SELECT e.id eid, e.seeded, COUNT(m.id) cnt, MIN(m.player_id) pid
+           FROM entries e LEFT JOIN entry_members m ON m.entry_id=e.id
+           WHERE e.competition_id=? GROUP BY e.id ORDER BY e.id""", (cid,))
+    if any(r["cnt"] != 1 for r in rows):
+        raise HTTPException(400, "Bitte zuerst die Teilnehmer wählen (Partner werden erst danach ausgelost).")
+    seeded = [r["pid"] for r in rows if r["seeded"]]
+    unseeded = [r["pid"] for r in rows if not r["seeded"]]
+    if len(seeded) == 0 or len(seeded) != len(unseeded):
+        raise HTTPException(400,
+            f"Für die Partnerauslosung müssen gleich viele gesetzte und ungesetzte Spieler vorhanden sein "
+            f"(aktuell {len(seeded)} gesetzt, {len(unseeded)} ungesetzt). Bitte Teilnehmer oder Setzung anpassen.")
+    rng = random.Random(seed)
+    rng.shuffle(unseeded)
+    await _delete_entries(db, cid)
+    for s_pid, u_pid in zip(seeded, unseeded):
+        eid = await db.execute("INSERT INTO entries (competition_id,seeded) VALUES (?,0)", (cid,))
+        await db.execute("INSERT INTO entry_members (entry_id,player_id,order_index) VALUES (?,?,0)", (eid, s_pid))
+        await db.execute("INSERT INTO entry_members (entry_id,player_id,order_index) VALUES (?,?,1)", (eid, u_pid))
+    return {"ok": True, "competition": comp_dto(c, entries=await load_entries(db, cid))}
+
+
+class SeedingIn(BaseModel):
+    seeded_entry_ids: list[int] = []
+
+
+@app.put("/api/competitions/{cid}/seeding")
+async def set_seeding(cid: int, body: SeedingIn, db=Depends(get_db)):
+    c = await get_comp(db, cid)
+    if c["status"] != "setup":
+        raise HTTPException(400, "Setzung ist nach der Auslosung fixiert.")
+    ids = set(body.seeded_entry_ids)
+    rows = await db.query("SELECT id FROM entries WHERE competition_id=?", (cid,))
+    for r in rows:
+        await db.execute("UPDATE entries SET seeded=? WHERE id=?", (1 if r["id"] in ids else 0, r["id"]))
+    return comp_dto(c, entries=await load_entries(db, cid))
+
+
 # ---- Auslosung ----------------------------------------------------------------
-def _draw_entries(entries: list[dict]) -> list[D.DrawEntry]:
-    return [D.DrawEntry(id=e["id"], seeded=e["seeded"], club_id=e["club_id"], seed_no=e["seed_no"])
+def _draw_entries(entries: list[dict], doubles: bool = False) -> list[D.DrawEntry]:
+    # Bei Doppel entfällt der Vereinsschutz -> club_id = None
+    return [D.DrawEntry(id=e["id"], seeded=e["seeded"],
+                        club_id=None if doubles else e["club_id"], seed_no=e["seed_no"])
             for e in entries]
 
 
@@ -274,6 +367,14 @@ async def draw(cid: int, seed: int | None = None, db=Depends(get_db)):
     entries = await load_entries(db, cid)
     if len(entries) < 2:
         raise HTTPException(400, "Mindestens 2 Meldungen nötig.")
+    doubles = c["competition_type"] == "double"
+    if doubles:
+        counts = await db.query(
+            """SELECT e.id, COUNT(m.id) cnt FROM entries e
+               LEFT JOIN entry_members m ON m.entry_id=e.id
+               WHERE e.competition_id=? GROUP BY e.id""", (cid,))
+        if any(r["cnt"] != 2 for r in counts):
+            raise HTTPException(400, "Doppel unvollständig: Bitte zuerst Paare bilden bzw. Partner auslosen.")
     rng = random.Random(seed)
     kind = mode_kind(c["mode"])
     conflicts = []
@@ -282,7 +383,7 @@ async def draw(cid: int, seed: int | None = None, db=Depends(get_db)):
         gc = effective_group_count(c["mode"], c["group_count"])
         if gc > len(entries):
             raise HTTPException(400, "Mehr Gruppen als Meldungen.")
-        groups, conflicts = D.draw_groups(_draw_entries(entries), gc, rng)
+        groups, conflicts = D.draw_groups(_draw_entries(entries, doubles), gc, rng)
         for gi, ids in enumerate(groups):
             for eid in ids:
                 await db.execute("UPDATE entries SET group_no=? WHERE id=?", (gi, eid))
@@ -291,7 +392,7 @@ async def draw(cid: int, seed: int | None = None, db=Depends(get_db)):
                     """INSERT INTO matches (competition_id,phase,round_no,group_no,home_entry_id,away_entry_id)
                        VALUES (?,?,?,?,?,?)""", (cid, "group", m["round"], gi, m["home"], m["away"]))
     elif kind == "ko":
-        slots, conflicts = D.draw_ko(_draw_entries(entries), rng)
+        slots, conflicts = D.draw_ko(_draw_entries(entries, doubles), rng)
         for pos, eid in enumerate(slots):
             if eid is not None:
                 await db.execute("UPDATE entries SET bracket_slot=? WHERE id=?", (pos, eid))
