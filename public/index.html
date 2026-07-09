@@ -275,11 +275,47 @@ function Setup({c,players,onDone,flash}){
   </div></div>;
 }
 
+const TARGET_POINTS = 11;  // feste Zielpunktzahl je Satz
+function validPointSet(h,a){
+  const H=+h, A=+a; if(H===A) return false;
+  const w=Math.max(H,A), l=Math.min(H,A);
+  if(w===TARGET_POINTS) return l<=TARGET_POINTS-2;          // z.B. 11:0 .. 11:9
+  if(w>TARGET_POINTS)   return (w-l===2) && l>=TARGET_POINTS-1; // Einstand: 12:10, 13:11 ...
+  return false;                                             // Gewinner unter 11 -> ungültig
+}
+function setWinner(h,a){
+  if(h===""||a==="") return null;
+  const H=+h, A=+a; if(H===A) return null;
+  return H>A?"h":"a";
+}
+
 function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
   const setsOnly = scoreMode==="sets";
-  const [rows,setRows]=useState(sets&&sets.length?sets.map(s=>[""+s[0],""+s[1]]):[["",""]]);
+  const init = sets&&sets.length ? sets.map(s=>[""+s[0],""+s[1]]) : [["",""]];
+  // Dynamik (Punkte-Modus): Leerzeilen entfernen, nach Entscheidung abschneiden,
+  // sonst genau eine leere Zeile anbieten (bis maxSets).
+  const normalize=(rs)=>{
+    let r=rs.map(x=>[...x]).filter(x=>x[0]!==""||x[1]!=="");
+    let hw=0,aw=0,cut=-1;
+    for(let i=0;i<r.length;i++){
+      const w=setWinner(r[i][0],r[i][1]);
+      if(w==="h")hw++; else if(w==="a")aw++;
+      if(hw>=setsToWin||aw>=setsToWin){cut=i;break;}
+    }
+    if(cut>=0) return r.slice(0,cut+1);
+    const last=r[r.length-1];
+    const lastComplete = last && last[0]!=="" && last[1]!=="";
+    if((r.length===0||lastComplete) && r.length<maxSets) r.push(["",""]);
+    if(r.length===0) r.push(["",""]);
+    return r;
+  };
+  const [rows,setRows]=useState(()=> setsOnly ? init : normalize(init));
   const [wo,setWo]=useState(walkover||null);
-  const upd=(i,side,v)=>{const r=rows.map(x=>[...x]);r[i][side]=v.replace(/[^0-9]/g,"").slice(0,2);setRows(r)};
+  const upd=(i,side,v)=>{
+    const r=rows.map(x=>[...x]);
+    r[i][side]=v.replace(/[^0-9]/g,"").slice(0,2);
+    setRows(setsOnly ? r : normalize(r));
+  };
   const save=()=>{
     if(wo){ onSave({walkover:wo}); return; }
     if(setsOnly){
@@ -289,7 +325,18 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
       }
       onSave({sets:[[h,a]]}); return;
     }
-    onSave({sets:rows.filter(s=>s[0]!==""||s[1]!=="").map(s=>[+s[0]||0,+s[1]||0])});
+    const filled=rows.filter(s=>s[0]!==""||s[1]!=="");
+    for(const s of filled){
+      if(!validPointSet(s[0],s[1])){
+        alert(`Ungültiger Satz ${s[0]||0}:${s[1]||0} – der Gewinner braucht ${TARGET_POINTS} Punkte mit 2 Punkten Vorsprung (bei Einstand ${TARGET_POINTS-1}:${TARGET_POINTS-1} entsprechend 12:10, 13:11 …).`); return;
+      }
+    }
+    let hw=0,aw=0;
+    for(const s of filled){ const w=setWinner(s[0],s[1]); if(w==="h")hw++; else if(w==="a")aw++; }
+    if(hw<setsToWin && aw<setsToWin){
+      alert(`Unvollständig: Es hat noch niemand ${setsToWin} Sätze gewonnen.`); return;
+    }
+    onSave({sets:filled.map(s=>[+s[0],+s[1]])});
   };
   return <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
     {!wo && setsOnly && <span title="Sätze Heim : Gast">
@@ -300,7 +347,6 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
       <input className="score" value={s[0]} onChange={e=>upd(i,0,e.target.value)}/>
       <span className="muted">:</span>
       <input className="score" value={s[1]} onChange={e=>upd(i,1,e.target.value)}/></span>)}
-    {!wo && !setsOnly && rows.length<maxSets && <button className="del" onClick={()=>setRows([...rows,["",""]])}>+ Satz</button>}
     {wo && <span className="pill">kampflos {wo==="home"?"◀":"▶"}</span>}
     <button className="btn ghost" onClick={()=>{setWo(wo==="home"?null:"home")}}>w.o.◀</button>
     <button className="btn ghost" onClick={()=>{setWo(wo==="away"?null:"away")}}>▶w.o.</button>
