@@ -28,8 +28,10 @@ class D1DB(Database):
 
     async def query(self, sql, params=()):
         res = await self._stmt(sql, params).all()
-        data = res.to_py()  # {'results': [...], 'meta': {...}, 'success': True}
-        return list(data.get("results", []))
+        # D1 gibt ein JsProxy zurück; die Zeilen stehen unter `.results`
+        # und werden damit zu einer Python-Liste von Dicts.
+        rows = res.results.to_py()
+        return [dict(r) for r in rows]
 
     async def query_one(self, sql, params=()):
         rows = await self.query(sql, params)
@@ -37,8 +39,12 @@ class D1DB(Database):
 
     async def execute(self, sql, params=()):
         res = await self._stmt(sql, params).run()
-        data = res.to_py()
-        return (data.get("meta") or {}).get("last_row_id")
+        # last_row_id steht in der Meta-Information des Ergebnisses.
+        try:
+            meta = res.meta.to_py()
+        except AttributeError:
+            meta = {}
+        return meta.get("last_row_id")
 
 
 # ------------------------------------------------------ SQLite (nur lokal) ----
