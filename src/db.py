@@ -26,12 +26,26 @@ class D1DB(Database):
         s = self.d1.prepare(sql)
         return s.bind(*params) if params else s
 
+    @staticmethod
+    def _to_list(value):
+        # Je nach Runtime ist das Ergebnis bereits eine Python-Liste,
+        # oder ein JsProxy, der erst über .to_py() umgewandelt werden muss.
+        if value is None:
+            return []
+        if hasattr(value, "to_py"):
+            value = value.to_py()
+        return list(value)
+
+    @staticmethod
+    def _to_dict(value):
+        if hasattr(value, "to_py"):
+            value = value.to_py()
+        return dict(value) if value is not None else {}
+
     async def query(self, sql, params=()):
         res = await self._stmt(sql, params).all()
-        # D1 gibt ein JsProxy zurück; die Zeilen stehen unter `.results`
-        # und werden damit zu einer Python-Liste von Dicts.
-        rows = res.results.to_py()
-        return [dict(r) for r in rows]
+        rows = self._to_list(res.results)
+        return [self._to_dict(r) for r in rows]
 
     async def query_one(self, sql, params=()):
         rows = await self.query(sql, params)
@@ -39,9 +53,8 @@ class D1DB(Database):
 
     async def execute(self, sql, params=()):
         res = await self._stmt(sql, params).run()
-        # last_row_id steht in der Meta-Information des Ergebnisses.
         try:
-            meta = res.meta.to_py()
+            meta = self._to_dict(res.meta)
         except AttributeError:
             meta = {}
         return meta.get("last_row_id")
