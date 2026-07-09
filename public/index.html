@@ -118,12 +118,18 @@ function Clubs(){
 function Players(){
   const [items,setItems]=useState([]); const [clubs,setClubs]=useState([]);
   const [f,setF]=useState({first_name:"",last_name:"",club_id:"",sex:""});
+  const [edit,setEdit]=useState(null);   // id des in Bearbeitung befindlichen Spielers
+  const [ef,setEf]=useState({});         // Formularwerte der Bearbeitung
   const load=()=>Promise.all([api("/players"),api("/clubs")]).then(([p,c])=>{setItems(p);setClubs(c)});
   useEffect(()=>{load()},[]);
   const add=async()=>{ if(!f.first_name.trim()&&!f.last_name.trim())return;
     await api("/players","POST",{...f,club_id:f.club_id?Number(f.club_id):null});
     setF({first_name:"",last_name:"",club_id:f.club_id,sex:""});load(); };
   const del=async id=>{await api("/players/"+id,"DELETE");load()};
+  const startEdit=p=>{ setEdit(p.id); setEf({first_name:p.first_name,last_name:p.last_name,
+    club_id:p.club_id?String(p.club_id):"",sex:p.sex||""}); };
+  const saveEdit=async id=>{ await api("/players/"+id,"PUT",{...ef,club_id:ef.club_id?Number(ef.club_id):null});
+    setEdit(null); load(); };
   return <div className="card"><h3>Spieler</h3><div className="body">
     <div className="row" style={{marginBottom:14}}>
       <div><label>Vorname</label><input value={f.first_name} onChange={e=>setF({...f,first_name:e.target.value})}/></div>
@@ -136,8 +142,21 @@ function Players(){
       <button className="btn" onClick={add}>+ Spieler</button>
     </div>
     <table><thead><tr><th>Name</th><th>Verein</th><th>m/w</th><th></th></tr></thead><tbody>
-      {items.map(p=><tr key={p.id}><td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
-        <td>{p.sex||"—"}</td><td style={{textAlign:"right"}}><button className="del" onClick={()=>del(p.id)}>🗑</button></td></tr>)}
+      {items.map(p=> edit===p.id
+        ? <tr key={p.id} style={{background:"#fff7ed"}}>
+            <td><input style={{width:80}} value={ef.first_name} onChange={e=>setEf({...ef,first_name:e.target.value})}/>
+                {" "}<input style={{width:80}} value={ef.last_name} onChange={e=>setEf({...ef,last_name:e.target.value})}/></td>
+            <td><select value={ef.club_id} onChange={e=>setEf({...ef,club_id:e.target.value})}>
+                <option value="">—</option>{clubs.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></td>
+            <td><select value={ef.sex} onChange={e=>setEf({...ef,sex:e.target.value})}>
+                <option value="">—</option><option value="m">m</option><option value="w">w</option></select></td>
+            <td style={{textAlign:"right",whiteSpace:"nowrap"}}>
+                <button className="btn blue" onClick={()=>saveEdit(p.id)}>Speichern</button>{" "}
+                <button className="btn ghost" onClick={()=>setEdit(null)}>Abbrechen</button></td></tr>
+        : <tr key={p.id}><td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
+            <td>{p.sex||"—"}</td><td style={{textAlign:"right",whiteSpace:"nowrap"}}>
+              <button className="btn ghost" onClick={()=>startEdit(p)}>Bearbeiten</button>{" "}
+              <button className="del" onClick={()=>del(p.id)}>🗑</button></td></tr>)}
     </tbody></table>
     {items.length===0 && <div className="muted">Noch keine Spieler.</div>}
   </div></div>;
@@ -152,6 +171,9 @@ function Comps({onOpen}){
   const create=async()=>{ if(!f.name.trim())return;
     try{ const c=await api("/competitions","POST",{...f,name:f.name.trim()}); load(); onOpen(c.id); }
     catch(e){alert(e.message)} };
+  const del=async(c,e)=>{ e.stopPropagation();
+    if(!window.confirm(`Wettbewerb „${c.name}" wirklich löschen?\nAlle Auslosungen, Spiele und Ergebnisse gehen dabei unwiderruflich verloren.`)) return;
+    try{ await api("/competitions/"+c.id,"DELETE"); load(); }catch(err){alert(err.message)} };
   const kind=modes.find(m=>m.key===f.mode)?.kind;
   const showGroups=["group","group_ko"].includes(kind);
   const showKO=["ko","group_ko"].includes(kind);
@@ -187,7 +209,9 @@ function Comps({onOpen}){
       {items.length===0 && <div className="muted">Noch keine Wettbewerbe.</div>}
       {items.map(c=><div key={c.id} className="list-item" style={{cursor:"pointer"}} onClick={()=>onOpen(c.id)}>
         <b style={{flex:1}}>{c.name}</b><span className="pill">{c.mode_label}</span>
-        <span className="pill">{c.status}</span><span className="muted">›</span></div>)}
+        <span className="pill">{c.status}</span>
+        <button className="del" title="Wettbewerb löschen" onClick={e=>del(c,e)}>🗑</button>
+        <span className="muted">›</span></div>)}
     </div></div>
   </>;
 }
