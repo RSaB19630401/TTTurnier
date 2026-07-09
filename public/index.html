@@ -405,10 +405,10 @@ function Play({c,onChange,flash}){
           <div style={{flex:1,textAlign:"right"}}><span className={m.complete&&m.winner===m.home?"win":""}>{m.home_name}</span></div>
           <span className="muted">vs</span>
           <div style={{flex:1}}><span className={m.complete&&m.winner===m.away?"win":""}>{m.away_name}</span></div>
-          {edit===m.id
+          {(edit===m.id || !m.complete)
             ? <SetEntry sets={m.sets} maxSets={maxG} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(m.id,b)}/>
-            : <button className="btn ghost" onClick={()=>setEdit(m.id)}>
-                {m.complete? m.sets.map(s=>s.join(":")).join("  ")||"w.o." : "Ergebnis"}</button>}
+            : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
+                {m.sets.map(s=>s.join(":")).join("  ")||"w.o."}</button>}
         </div>)}
       </div></div>
       {c.kind==="group_ko" && !br?.rounds && <button className="btn" disabled={!groupsDone} onClick={buildKO}>
@@ -431,10 +431,10 @@ function Play({c,onChange,flash}){
               {m.bye
                 ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>Freilos</div>
                 : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
-                    {edit===m.id
+                    {(edit===m.id || !m.winner)
                       ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
-                      : <button className="btn ghost" onClick={()=>setEdit(m.id)}>
-                          {m.winner? (m.sets.map(s=>s.join(":")).join(" ")||"w.o.") : "Ergebnis"}</button>}
+                      : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
+                          {m.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
                   </div>)}
             </div>)}
           </div>;
