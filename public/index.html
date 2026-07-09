@@ -165,7 +165,7 @@ function Players(){
 // -------------------------------------------------------------- Wettbewerbe --
 function Comps({onOpen}){
   const [items,setItems]=useState([]); const [modes,setModes]=useState([]);
-  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3,score_mode:"points"});
+  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3,score_mode:"points",competition_type:"single",pairing:"fixed"});
   const load=()=>Promise.all([api("/competitions"),api("/modes")]).then(([c,m])=>{setItems(c);setModes(m)});
   useEffect(()=>{load()},[]);
   const create=async()=>{ if(!f.name.trim())return;
@@ -183,14 +183,27 @@ function Comps({onOpen}){
         <div style={{flex:1}}><label>Name</label><input style={{width:"100%"}} value={f.name}
           onChange={e=>setF({...f,name:e.target.value})}/></div>
       </div>
-      <label>Modus</label>
-      <div className="modegrid" style={{marginBottom:12}}>
-        {modes.map(m=><div key={m.key}
-          className={"modeopt"+(f.mode===m.key?" on":"")+(m.implemented?"":" off")}
-          onClick={()=>m.implemented&&setF({...f,mode:m.key})}>
-          <div className="lab">{m.label} {!m.implemented&&<span className="pill">geplant</span>}</div>
-          <div className="hint">{m.hint}</div></div>)}
+      <label>Art</label>
+      <div className="row" style={{marginBottom:10}}>
+        <select value={f.competition_type} onChange={e=>{const t=e.target.value;
+          setF(prev=>({...prev,competition_type:t,mode:t==="double"?"ko":prev.mode}));}}>
+          <option value="single">Einzel</option><option value="double">Doppel</option>
+        </select>
+        {f.competition_type==="double" && <select value={f.pairing} onChange={e=>setF({...f,pairing:e.target.value})}>
+          <option value="fixed">feste Paare melden</option><option value="draw">Partner auslosen</option>
+        </select>}
       </div>
+      {f.competition_type==="single" ? <>
+        <label>Modus</label>
+        <div className="modegrid" style={{marginBottom:12}}>
+          {modes.map(m=><div key={m.key}
+            className={"modeopt"+(f.mode===m.key?" on":"")+(m.implemented?"":" off")}
+            onClick={()=>m.implemented&&setF({...f,mode:m.key})}>
+            <div className="lab">{m.label} {!m.implemented&&<span className="pill">geplant</span>}</div>
+            <div className="hint">{m.hint}</div></div>)}
+        </div>
+      </> : <div className="muted" style={{marginBottom:12,fontSize:13}}>
+        Doppel wird derzeit als <b>Einfach-KO</b> gespielt.</div>}
       <div className="row">
         {showGroups && <div><label>Gruppen</label><input type="number" style={{width:80}} value={f.group_count}
           onChange={e=>setF({...f,group_count:+e.target.value})}/></div>}
@@ -233,7 +246,11 @@ function CompDetail({id,onBack}){
     </div>
     {msg && <div className="flash">{msg}</div>}
     {c.status==="setup"
-      ? <Setup c={c} players={players} onDone={()=>{reload()}} flash={flash}/>
+      ? (c.competition_type==="double"
+          ? (c.pairing==="fixed"
+              ? <SetupDoublesFixed c={c} players={players} onDone={()=>reload()} flash={flash}/>
+              : <SetupDoublesDraw c={c} players={players} onDone={()=>reload()} flash={flash}/>)
+          : <Setup c={c} players={players} onDone={()=>{reload()}} flash={flash}/>)
       : <Play c={c} onChange={reload} flash={flash}/>}
   </>;
 }
@@ -272,6 +289,87 @@ function Setup({c,players,onDone,flash}){
       <button className="btn ghost" onClick={save} disabled={chosen.length<2}>Teilnehmer speichern</button>
       <button className="btn" onClick={doDraw} disabled={chosen.length<2}>Auslosen ({chosen.length})</button>
     </div>
+  </div></div>;
+}
+
+// ------------------------------------------------------------- Doppel: feste Paare
+function SetupDoublesFixed({c,players,onDone,flash}){
+  const [pairs,setPairs]=useState([]); const [a,setA]=useState(""); const [b,setB]=useState("");
+  const used=new Set(pairs.flatMap(p=>[p.a,p.b]));
+  const avail=players.filter(p=>!used.has(p.id));
+  const nameOf=id=>{const p=players.find(x=>x.id===id);return p?p.name:id;};
+  const add=()=>{ if(!a||!b||a===b)return; setPairs([...pairs,{a:+a,b:+b,seeded:false}]); setA("");setB(""); };
+  const rm=i=>setPairs(pairs.filter((_,j)=>j!==i));
+  const tSeed=i=>setPairs(pairs.map((p,j)=>j===i?{...p,seeded:!p.seeded}:p));
+  const doDraw=async()=>{
+    try{
+      await api(`/competitions/${c.id}/pairs`,"PUT",
+        {pairs:pairs.map(p=>[p.a,p.b]), seeded:pairs.map((p,i)=>p.seeded?i:-1).filter(i=>i>=0)});
+      await api(`/competitions/${c.id}/draw`,"POST");
+      flash("Ausgelost."); onDone();
+    }catch(e){flash(e.message)}
+  };
+  return <div className="card"><h3>Doppel bilden (feste Paare)</h3><div className="body">
+    <div className="row" style={{marginBottom:12}}>
+      <div><label>Spieler 1</label><select value={a} onChange={e=>setA(e.target.value)}>
+        <option value="">—</option>{avail.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+      <div><label>Spieler 2</label><select value={b} onChange={e=>setB(e.target.value)}>
+        <option value="">—</option>{avail.filter(p=>String(p.id)!==a).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+      <button className="btn" onClick={add} disabled={!a||!b}>+ Doppel</button>
+    </div>
+    {pairs.length===0 && <div className="muted">Noch keine Doppel gebildet.</div>}
+    {pairs.map((p,i)=><div key={i} className="list-item">
+      <b style={{flex:1}}>{nameOf(p.a)} / {nameOf(p.b)}</b>
+      <label style={{fontSize:12}}><input type="checkbox" checked={p.seeded} onChange={()=>tSeed(i)}/> gesetzt</label>
+      <button className="del" onClick={()=>rm(i)}>🗑</button></div>)}
+    <div style={{marginTop:14}}>
+      <button className="btn" onClick={doDraw} disabled={pairs.length<2}>Auslosen ({pairs.length} Doppel)</button>
+    </div>
+    <div className="muted" style={{fontSize:11,marginTop:6}}>„gesetzt" ist optional – gesetzte Doppel werden im Baum getrennt.</div>
+  </div></div>;
+}
+
+// ------------------------------------------------------- Doppel: Partner auslosen
+function SetupDoublesDraw({c,players,onDone,flash}){
+  const paired = c.entries.length>0 && c.entries.every(e=>(e.name||"").includes(" / "));
+  const [sel,setSel]=useState({}); const [seed,setSeed]=useState({});
+  const [koSeed,setKoSeed]=useState({});
+  useEffect(()=>{ if(paired){ const init={}; c.entries.forEach(e=>{if(e.seeded)init[e.id]=true;}); setKoSeed(init);} },[paired,c.id]);
+  const chosen=players.filter(p=>sel[p.id]);
+  const seededCount=chosen.filter(p=>seed[p.id]).length;
+  const doPair=async()=>{
+    try{
+      await api(`/competitions/${c.id}/entries`,"PUT",
+        {player_ids:chosen.map(p=>p.id),seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id)});
+      await api(`/competitions/${c.id}/draw_partners`,"POST");
+      flash("Partner ausgelost – jetzt ggf. setzen und KO auslosen."); onDone();
+    }catch(e){flash(e.message)}
+  };
+  const doDraw=async()=>{
+    try{
+      await api(`/competitions/${c.id}/seeding`,"PUT",
+        {seeded_entry_ids:Object.keys(koSeed).filter(k=>koSeed[k]).map(Number)});
+      await api(`/competitions/${c.id}/draw`,"POST"); flash("Ausgelost."); onDone();
+    }catch(e){flash(e.message)}
+  };
+  if(!paired) return <div className="card"><h3>Teilnehmer &amp; stärkere Hälfte</h3><div className="body">
+    <div className="muted" style={{marginBottom:8,fontSize:13}}>Wähle alle Teilnehmer und kreuze die <b>stärkere Hälfte</b> als „gesetzt" an. Jeder Gesetzte erhält einen zufälligen ungesetzten Partner (beide Hälften müssen gleich groß sein).</div>
+    <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th><th>Gesetzt</th></tr></thead><tbody>
+      {players.map(p=><tr key={p.id}>
+        <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>setSel(s=>({...s,[p.id]:!s[p.id]}))}/></td>
+        <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
+        <td>{sel[p.id] && <input type="checkbox" checked={!!seed[p.id]} onChange={()=>setSeed(s=>({...s,[p.id]:!s[p.id]}))}/>}</td>
+      </tr>)}
+    </tbody></table>
+    <div className="muted" style={{fontSize:12,marginTop:6}}>{chosen.length} Teilnehmer, davon {seededCount} gesetzt.</div>
+    <div style={{marginTop:14}}><button className="btn" onClick={doPair} disabled={chosen.length<2}>Partner auslosen</button></div>
+  </div></div>;
+  return <div className="card"><h3>Doppel setzen &amp; KO auslosen</h3><div className="body">
+    <div className="muted" style={{marginBottom:8,fontSize:13}}>Partner sind ausgelost. Optional einzelne Doppel als „gesetzt" markieren (getrennte Baumhälften), dann auslosen.</div>
+    {c.entries.map(e=><div key={e.id} className="list-item">
+      <b style={{flex:1}}>{e.name}</b>
+      <label style={{fontSize:12}}><input type="checkbox" checked={!!koSeed[e.id]} onChange={()=>setKoSeed(s=>({...s,[e.id]:!s[e.id]}))}/> gesetzt</label></div>)}
+    <div style={{marginTop:14}}><button className="btn" onClick={doDraw} disabled={c.entries.length<2}>KO auslosen ({c.entries.length} Doppel)</button></div>
   </div></div>;
 }
 
