@@ -468,8 +468,46 @@ async def bracket(cid: int, db=Depends(get_db)):
 
 
 # ---- Gruppe -> KO -------------------------------------------------------------
+class BuildKoIn(BaseModel):
+    qualifiers: list[int] | None = None   # None = Vorschau/Planung, sonst gewählte Kandidaten
+
+
+def _plan_ko_qualifiers(rk: dict, N: int):
+    """Ermittelt sichere Aufsteiger und die zur Auswahl stehenden Kandidaten.
+    Kandidat = echter Patt an der Aufstiegsgrenze ('patt') oder bester Dritter/Auffüllen ('fill')."""
+    safe, candidates = [], []
+    for g in rk["groups"]:
+        rows = g["rows"]; gi = g["group"]
+        unresolved = g.get("unresolved") or []
+        straddle, straddle_top = None, None
+        for U in unresolved:
+            ranks = [r["rank"] for r in rows if r["entry"] in U]
+            if ranks and min(ranks) <= N and max(ranks) > N:
+                straddle, straddle_top = set(U), min(ranks); break
+        if straddle:
+            safe_here = [r for r in rows if r["rank"] < straddle_top]
+            cand_here = [r for r in rows if r["entry"] in straddle]
+            reason = "patt"
+        else:
+            safe_here = [r for r in rows if r["rank"] <= N]
+            cand_here = [r for r in rows if r["rank"] == N + 1]
+            # bei Gleichstand auf dem N+1-Platz die ganze betroffene Gruppe aufnehmen
+            for U in unresolved:
+                if any(r["entry"] in U for r in cand_here):
+                    for r in rows:
+                        if r["entry"] in U and r not in cand_here:
+                            cand_here.append(r)
+            reason = "fill"
+        safe.extend(r["entry"] for r in safe_here)
+        for r in cand_here:
+            candidates.append({"entry": r["entry"], "name": r["name"], "group": gi,
+                               "rank": r["rank"], "mp": r["mp"], "gw": r["gw"], "gl": r["gl"],
+                               "set_ratio": r["set_ratio"], "club_id": r["club_id"], "reason": reason})
+    return safe, candidates
+
+
 @app.post("/api/competitions/{cid}/build_ko")
-async def build_ko(cid: int, seed: int | None = None, db=Depends(get_db)):
+async def build_ko(cid: int, body: BuildKoIn | None = None, seed: int | None = None, db=Depends(get_db)):
     c = await get_comp(db, cid)
     if mode_kind(c["mode"]) != "group_ko":
         raise HTTPException(400, "Nur für Gruppe+KO verfügbar.")
@@ -482,18 +520,36 @@ async def build_ko(cid: int, seed: int | None = None, db=Depends(get_db)):
                         c["sets_to_win"], c["points_per_set"])
             if not o["complete"]:
                 raise HTTPException(400, "Es sind noch nicht alle Gruppenspiele gespielt.")
+
     rk = await ranking(cid, db)
-    quals = []
-    for g in rk["groups"]:
-        for row in g["rows"][:c["advance_per_group"]]:
-            quals.append((row["entry"], row["rank"], g["group"], row["club_id"]))
-    quals.sort(key=lambda x: (x[1], x[2]))
-    dentries = [D.DrawEntry(id=q[0], seeded=(q[1] == 1), club_id=q[3], seed_no=idx + 1)
-                for idx, q in enumerate(quals)]
+    N = c["advance_per_group"]
+    safe, candidates = _plan_ko_qualifiers(rk, N)
+    cand_ids = {x["entry"] for x in candidates}
+    entries = {e["id"]: e for e in await load_entries(db, cid)}
+
+    # Stufe 1: Auswahl nötig? -> Kandidaten zurückmelden, noch nicht bauen.
+    if body is None or body.qualifiers is None:
+        if candidates:
+            return {"ok": True, "built": False, "needs_selection": True,
+                    "regular_target": len(rk["groups"]) * N,
+                    "safe": [{"entry": eid, "name": entries.get(eid, {}).get("name")} for eid in safe],
+                    "candidates": candidates}
+        chosen = []
+    else:
+        chosen = [q for q in body.qualifiers if q in cand_ids]
+
+    # Stufe 2: bauen aus sicheren Aufsteigern + Auswahl
+    final = list(dict.fromkeys(safe + chosen))
+    if len(final) < 2:
+        raise HTTPException(400, "Zu wenige Aufsteiger für ein KO.")
+    rowmap = {r["entry"]: r for g in rk["groups"] for r in g["rows"]}
+    dentries = [D.DrawEntry(id=eid, seeded=(rowmap[eid]["rank"] == 1),
+                            club_id=rowmap[eid]["club_id"], seed_no=idx + 1)
+                for idx, eid in enumerate(final)]
     slots, conflicts = D.draw_ko(dentries, random.Random(seed))
     for pos, eid in enumerate(slots):
         if eid is not None:
             await db.execute("UPDATE entries SET bracket_slot=? WHERE id=?", (pos, eid))
     await _insert_ko_skeleton(db, cid, slots)
     await db.execute("UPDATE competitions SET status='running' WHERE id=?", (cid,))
-    return {"ok": True, "conflicts": conflicts}
+    return {"ok": True, "built": True, "conflicts": conflicts, "qualifiers": final}
