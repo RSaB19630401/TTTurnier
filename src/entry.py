@@ -1,14 +1,18 @@
-"""Cloudflare Python Worker – Einstiegspunkt.
-
-Reicht eingehende Requests über die von der Workers-Runtime bereitgestellte
-ASGI-Bridge an die FastAPI-App weiter. `self.env` enthält die Bindings
-(u. a. die D1-Datenbank `env.DB`) und wird in den ASGI-Scope gelegt, sodass
-die Routen sie via `request.scope["env"]` erreichen.
-"""
+"""Cloudflare Python Worker – Einstiegspunkt (mit temporärer Fehlerdiagnose)."""
 from workers import WorkerEntrypoint
 import asgi
+import traceback
+from fastapi import Request
+from fastapi.responses import PlainTextResponse
 
-from app import app  # FastAPI-Instanz
+from app import app
+
+
+# TEMPORÄR: zeigt den echten Python-Fehler im Browser statt "Internal Server Error".
+# Wird nach der Fehlersuche wieder entfernt.
+@app.exception_handler(Exception)
+async def _debug_unhandled(request: Request, exc: Exception):
+    return PlainTextResponse(traceback.format_exc(), status_code=500)
 
 
 class Default(WorkerEntrypoint):
