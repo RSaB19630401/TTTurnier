@@ -400,13 +400,14 @@ async def draw(cid: int, seed: int | None = None, db=Depends(get_db)):
         await _insert_ko_skeleton(db, cid, slots)
     elif kind == "double_ko":
         n = len(entries)
-        if n < 4 or (n & (n - 1)) != 0:
-            raise HTTPException(400, "Doppel-KO benötigt derzeit 4, 8, 16 oder 32 Teilnehmer (Zweierpotenz).")
-        slots, _ = D.draw_ko(_draw_entries(entries, True), rng)  # WB-Startaufstellung; bei Doppel-KO kein Vereinsschutz
+        if n < 4 or n > 64:
+            raise HTTPException(400, "Doppel-KO ist für 4 bis 64 Teilnehmer möglich.")
+        slots, _ = D.draw_ko(_draw_entries(entries, True), rng)  # Länge = nächste Zweierpotenz, Freilose = None
         for pos, eid in enumerate(slots):
             if eid is not None:
                 await db.execute("UPDATE entries SET bracket_slot=? WHERE id=?", (pos, eid))
-        nodes, meta = DE.build(n)
+        S = len(slots)
+        nodes, meta = DE.build(S)
         for nid in nodes:
             phase, r, i = nid.split(":")
             home = away = None
@@ -481,8 +482,9 @@ async def _de_state(db, c):
     seeding = [None] * n
     for m in wb0:
         i = m["bracket_index"]
-        seeding[2 * i] = m["home_entry_id"]
-        seeding[2 * i + 1] = m["away_entry_id"]
+        # None auf einem WB-Startplatz bedeutet Freilos (BYE), nicht „unbekannt"
+        seeding[2 * i] = m["home_entry_id"] if m["home_entry_id"] is not None else DE.BYE
+        seeding[2 * i + 1] = m["away_entry_id"] if m["away_entry_id"] is not None else DE.BYE
 
     def row_winner(row):
         h, a = row["home_entry_id"], row["away_entry_id"]
@@ -523,6 +525,8 @@ async def post_result(mid: int, body: ResultIn, db=Depends(get_db)):
         if m["phase"] == "gf" and m["bracket_round"] == 1 and not st["reset_active"]:
             raise HTTPException(400, "Das Reset-Finale ist nicht nötig – der Sieger steht bereits fest.")
         h, a = st["occ"].get(nid, (None, None))
+        if h == DE.BYE or a == DE.BYE:
+            raise HTTPException(400, "Freilos – hier wird kein Ergebnis erfasst.")
         if h is None or a is None:
             raise HTTPException(400, "Beide Teilnehmer stehen noch nicht fest.")
         await db.execute("UPDATE matches SET home_entry_id=?, away_entry_id=? WHERE id=?", (h, a, mid))
@@ -647,10 +651,14 @@ async def double_bracket(cid: int, db=Depends(get_db)):
         row = by.get(nid)
         h, a = occ.get(nid, (None, None))
         w = winner.get(nid)
+        bye = (h == DE.BYE) or (a == DE.BYE)
+        hh = None if (h is None or h == DE.BYE) else h
+        aa = None if (a is None or a == DE.BYE) else a
+        ww = None if (w is None or w == DE.BYE) else w
         out.append({"node": nid, "phase": phase, "round": int(r), "index": int(i),
                     "id": row["id"] if row else None,
-                    "home": h, "away": a, "home_name": names.get(h), "away_name": names.get(a),
-                    "winner": w, "winner_name": names.get(w),
+                    "home": hh, "away": aa, "home_name": names.get(hh), "away_name": names.get(aa),
+                    "winner": ww, "winner_name": names.get(ww), "bye": bye,
                     "sets": [[s["home_points"], s["away_points"]] for s in (row["sets"] if row else [])],
                     "walkover": row["walkover"] if row else None,
                     "reset": nid == "gf:1:0"})
