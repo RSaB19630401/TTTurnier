@@ -202,8 +202,13 @@ function Comps({onOpen}){
             <div className="lab">{m.label} {!m.implemented&&<span className="pill">geplant</span>}</div>
             <div className="hint">{m.hint}</div></div>)}
         </div>
-      </> : <div className="muted" style={{marginBottom:12,fontSize:13}}>
-        Doppel wird derzeit als <b>Einfach-KO</b> gespielt.</div>}
+      </> : <div className="row" style={{marginBottom:12}}>
+        <div><label>Modus (Doppel)</label>
+          <select value={f.mode} onChange={e=>setF({...f,mode:e.target.value})}>
+            <option value="ko">Einfach-KO</option><option value="double_ko">Doppel-KO</option>
+          </select></div>
+        <div className="muted" style={{fontSize:12,alignSelf:"center"}}>Doppel-KO: 4, 8, 16 oder 32 Doppel.</div>
+      </div>}
       <div className="row">
         {showGroups && <div><label>Gruppen</label><input type="number" style={{width:80}} value={f.group_count}
           onChange={e=>setF({...f,group_count:+e.target.value})}/></div>}
@@ -452,16 +457,52 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
   </div>;
 }
 
+function DoubleBracketView({de,c,edit,setEdit,saveResult,maxK}){
+  const matchCell=(m)=><div className="bmatch" key={m.node}>
+    <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name||<i className="muted">…</i>}</span></div>
+    <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name||<i className="muted">…</i>}</span></div>
+    {m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
+      {(edit===m.id || !m.winner)
+        ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
+        : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
+            {m.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
+    </div>}
+  </div>;
+  const cols=(list)=>{
+    const rounds=[...new Set(list.map(m=>m.round))].sort((a,b)=>a-b);
+    return rounds.map(r=><div key={r} className="bcol">
+      {list.filter(m=>m.round===r).sort((a,b)=>a.index-b.index).map(matchCell)}</div>);
+  };
+  const wb=de.matches.filter(m=>m.phase==="wb");
+  const lb=de.matches.filter(m=>m.phase==="lb");
+  const gf=de.matches.filter(m=>m.phase==="gf" && (m.round===0 || de.reset_active));
+  return <>
+    {de.champion_name && <div className="card"><div className="body">
+      <div style={{background:"linear-gradient(90deg,var(--blue2),var(--blue))",color:"#fff",padding:"12px 16px",borderRadius:10}}>
+        <span style={{color:"var(--ball)",fontWeight:800}}>🏆 Sieger:</span> <b style={{fontSize:18}}>{de.champion_name}</b>
+        <span style={{marginLeft:16,color:"#cbd5e1",fontSize:13}}>2. {de.runner_up_name} · 3. {de.third_name}</span>
+      </div></div></div>}
+    <div className="card"><h3>Winner-Bracket</h3><div className="body"><div className="bracket">{cols(wb)}</div></div></div>
+    <div className="card"><h3>Loser-Bracket</h3><div className="body"><div className="bracket">{cols(lb)}</div></div></div>
+    <div className="card"><h3>Grand Final{de.reset_active?" · mit Reset-Finale":""}</h3><div className="body">
+      <div className="bracket">{cols(gf)}</div>
+      <div className="muted" style={{fontSize:11,marginTop:6}}>Gewinnt der Loser-Bracket-Sieger das erste Finale, entscheidet das Reset-Finale.</div>
+    </div></div>
+  </>;
+}
+
 function Play({c,onChange,flash}){
   const [matches,setMatches]=useState([]); const [rank,setRank]=useState(null); const [br,setBr]=useState(null);
-  const [grp,setGrp]=useState(0); const [edit,setEdit]=useState(null);
+  const [grp,setGrp]=useState(0); const [edit,setEdit]=useState(null); const [de,setDe]=useState(null);
   const hasGroups=["group","group_ko"].includes(c.kind);
   const hasKO=["ko","group_ko"].includes(c.kind);
+  const isDouble=c.kind==="double_ko";
   const load=()=>{
     const jobs=[];
     if(hasGroups){ jobs.push(api(`/competitions/${c.id}/matches`).then(setMatches),
                               api(`/competitions/${c.id}/ranking`).then(setRank)); }
     if(hasKO){ jobs.push(api(`/competitions/${c.id}/bracket`).then(setBr)); }
+    if(isDouble){ jobs.push(api(`/competitions/${c.id}/double_bracket`).then(setDe)); }
     return Promise.all(jobs);
   };
   useEffect(()=>{load()},[c.status]);
@@ -485,6 +526,7 @@ function Play({c,onChange,flash}){
   const groupsDone=matches.length>0 && matches.every(m=>m.complete);
 
   return <>
+    {isDouble && de?.ready && <DoubleBracketView de={de} c={c} edit={edit} setEdit={setEdit} saveResult={saveResult} maxK={maxK}/>}
     {hasGroups && rank && <>
       {c.group_count>1 && <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
         {rank.groups.map((g,gi)=>{
