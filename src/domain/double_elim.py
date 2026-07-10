@@ -70,13 +70,16 @@ def build(n: int):
     return nodes, meta
 
 
+BYE = "__BYE__"   # Freilos-Platzhalter: verliert jedes Match, zählt nie als Niederlage
+
+
 def evaluate(nodes, meta, seeding, decided):
-    """Wertet den Graphen aus.
-    seeding: Liste der Entry-IDs je WB-Startslot.
-    decided: dict node_id -> Sieger-Entry-ID (nur für gespielte Matches).
-    Rückgabe: dict mit occ (Teilnehmer je Knoten), winner, loser, champion, runner_up, third, reset_active.
-    """
+    """Wertet den Graphen aus. seeding-Einträge sind Entry-IDs, BYE (Freilos) oder None.
+    Freilose lösen Matches automatisch auf (der reale Teilnehmer steigt kampflos auf)."""
     win, lose, occ = {}, {}, {}
+
+    def is_real(x):
+        return x is not None and x != BYE
 
     def source(src):
         t, ref = src
@@ -90,37 +93,46 @@ def evaluate(nodes, meta, seeding, decided):
         h = source(nodes[nid]["home"])
         a = source(nodes[nid]["away"])
         occ[nid] = (h, a)
-        if h is not None and a is not None and nid in decided:
-            w = decided[nid]
-            win[nid] = w
-            lose[nid] = a if w == h else h
+        if h is None or a is None:
+            return  # ein Zubringer steht noch nicht fest
+        if h == BYE and a == BYE:
+            win[nid] = BYE; lose[nid] = BYE
+        elif h == BYE:
+            win[nid] = a; lose[nid] = BYE
+        elif a == BYE:
+            win[nid] = h; lose[nid] = BYE
+        else:
+            w = decided.get(nid)
+            if w is not None:
+                win[nid] = w; lose[nid] = a if w == h else h
 
     def winner_of(nid):
-        resolve(nid)
-        return win.get(nid)
+        resolve(nid); return win.get(nid)
 
     def loser_of(nid):
-        resolve(nid)
-        return lose.get(nid)
+        resolve(nid); return lose.get(nid)
 
     for nid in nodes:
         resolve(nid)
 
-    x = winner_of(meta["wb_final"])      # WB-Sieger (0 Niederlagen)
-    y = winner_of(meta["lb_final"])      # LB-Sieger (1 Niederlage)
-    g1 = winner_of(meta["gf"])
+    def real(x):
+        return x if is_real(x) else None
+
+    x = real(winner_of(meta["wb_final"]))
+    y = real(winner_of(meta["lb_final"]))
+    g1 = real(winner_of(meta["gf"]))
     champion = runner_up = None
     reset_active = False
-    if g1 is not None:
+    if x is not None and y is not None and g1 is not None:
         if g1 == x:
             champion, runner_up = x, y
         else:
             reset_active = True
-            g2 = winner_of(meta["gf_reset"])
+            g2 = real(winner_of(meta["gf_reset"]))
             if g2 is not None:
                 champion = g2
                 runner_up = x if g2 == y else y
-    third = loser_of(meta["lb_final"])
+    third = real(loser_of(meta["lb_final"]))
     return {"occ": occ, "winner": win, "loser": lose,
             "champion": champion, "runner_up": runner_up, "third": third,
             "reset_active": reset_active}
