@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from db import Database, D1DB
 from domain import ranking as R
 from domain import draw as D
+from domain import double_elim as DE
 from domain.modes import MODES, mode_kind, effective_group_count, round_robin_schedule
 
 app = FastAPI(title="TT-Turnier")
@@ -205,8 +206,8 @@ async def create_comp(body: CompIn, db=Depends(get_db)):
     ctype = body.competition_type if body.competition_type in ("single", "double") else "single"
     pairing = None
     if ctype == "double":
-        if body.mode != "ko":
-            raise HTTPException(400, "Doppel ist derzeit nur als Einfach-KO verfügbar.")
+        if body.mode not in ("ko", "double_ko"):
+            raise HTTPException(400, "Doppel ist derzeit als Einfach-KO oder Doppel-KO verfügbar.")
         pairing = body.pairing if body.pairing in ("fixed", "draw") else None
         if pairing is None:
             raise HTTPException(400, "Bitte ein Paarbildungs-Verfahren wählen (feste Paare oder auslosen).")
@@ -397,6 +398,23 @@ async def draw(cid: int, seed: int | None = None, db=Depends(get_db)):
             if eid is not None:
                 await db.execute("UPDATE entries SET bracket_slot=? WHERE id=?", (pos, eid))
         await _insert_ko_skeleton(db, cid, slots)
+    elif kind == "double_ko":
+        n = len(entries)
+        if n < 4 or (n & (n - 1)) != 0:
+            raise HTTPException(400, "Doppel-KO benötigt derzeit 4, 8, 16 oder 32 Teilnehmer (Zweierpotenz).")
+        slots, _ = D.draw_ko(_draw_entries(entries, True), rng)  # WB-Startaufstellung; bei Doppel-KO kein Vereinsschutz
+        for pos, eid in enumerate(slots):
+            if eid is not None:
+                await db.execute("UPDATE entries SET bracket_slot=? WHERE id=?", (pos, eid))
+        nodes, meta = DE.build(n)
+        for nid in nodes:
+            phase, r, i = nid.split(":")
+            home = away = None
+            if nid.startswith("wb:0:"):
+                home, away = slots[2 * int(i)], slots[2 * int(i) + 1]
+            await db.execute(
+                """INSERT INTO matches (competition_id,phase,bracket_round,bracket_index,home_entry_id,away_entry_id)
+                   VALUES (?,?,?,?,?,?)""", (cid, phase, int(r), int(i), home, away))
     else:
         raise HTTPException(400, "Für diesen Modus ist die Auslosung noch nicht aktiv.")
 
@@ -450,6 +468,40 @@ async def _ko_state(db, c):
     return {"occ": occ, "winners": winners, "rounds": rounds, "by": by}
 
 
+async def _de_state(db, c):
+    """Live-Auswertung eines Doppel-KO aus den gespeicherten Ergebnissen."""
+    ms = await load_matches(db, c["id"])
+    de = [m for m in ms if m["phase"] in ("wb", "lb", "gf")]
+    by = {f'{m["phase"]}:{m["bracket_round"]}:{m["bracket_index"]}': m for m in de}
+    wb0 = [m for m in de if m["phase"] == "wb" and m["bracket_round"] == 0]
+    n = len(wb0) * 2
+    if n < 4:
+        return None
+    nodes, meta = DE.build(n)
+    seeding = [None] * n
+    for m in wb0:
+        i = m["bracket_index"]
+        seeding[2 * i] = m["home_entry_id"]
+        seeding[2 * i + 1] = m["away_entry_id"]
+
+    def row_winner(row):
+        h, a = row["home_entry_id"], row["away_entry_id"]
+        if h is None or a is None:
+            return None
+        o = outcome(c["score_mode"], row["walkover"], row["sets"], h, a,
+                    c["ko_sets_to_win"], c["points_per_set"])
+        return o["winner"] if o["complete"] else None
+
+    decided = {}
+    for nid, row in by.items():
+        w = row_winner(row)
+        if w is not None:
+            decided[nid] = w
+    st = DE.evaluate(nodes, meta, seeding, decided)
+    st.update({"nodes": nodes, "meta": meta, "by": by, "seeding": seeding})
+    return st
+
+
 @app.post("/api/matches/{mid}/result")
 async def post_result(mid: int, body: ResultIn, db=Depends(get_db)):
     m = await db.query_one("SELECT * FROM matches WHERE id=?", (mid,))
@@ -465,9 +517,20 @@ async def post_result(mid: int, body: ResultIn, db=Depends(get_db)):
         await db.execute("UPDATE matches SET home_entry_id=?, away_entry_id=? WHERE id=?", (h, a, mid))
         m["home_entry_id"], m["away_entry_id"] = h, a
 
+    if m["phase"] in ("wb", "lb", "gf"):
+        st = await _de_state(db, c)
+        nid = f'{m["phase"]}:{m["bracket_round"]}:{m["bracket_index"]}'
+        if m["phase"] == "gf" and m["bracket_round"] == 1 and not st["reset_active"]:
+            raise HTTPException(400, "Das Reset-Finale ist nicht nötig – der Sieger steht bereits fest.")
+        h, a = st["occ"].get(nid, (None, None))
+        if h is None or a is None:
+            raise HTTPException(400, "Beide Teilnehmer stehen noch nicht fest.")
+        await db.execute("UPDATE matches SET home_entry_id=?, away_entry_id=? WHERE id=?", (h, a, mid))
+        m["home_entry_id"], m["away_entry_id"] = h, a
+
     await db.execute("DELETE FROM match_sets WHERE match_id=?", (mid,))
     walkover = body.walkover if body.walkover in ("home", "away") else None
-    stw = c["ko_sets_to_win"] if m["phase"] == "ko" else c["sets_to_win"]
+    stw = c["sets_to_win"] if m["phase"] == "group" else c["ko_sets_to_win"]
     if not walkover and body.sets:
         if c["score_mode"] == "sets":
             # Genau ein Satzergebnis erwartet: [Sätze_Heim, Sätze_Gast]
@@ -566,6 +629,38 @@ async def bracket(cid: int, db=Depends(get_db)):
     champ = winners.get((rounds - 1, 0))
     return {"rounds": rounds, "matches": out, "champion": champ,
             "champion_name": entries.get(champ, {}).get("name")}
+
+
+@app.get("/api/competitions/{cid}/double_bracket")
+async def double_bracket(cid: int, db=Depends(get_db)):
+    c = await get_comp(db, cid)
+    if mode_kind(c["mode"]) != "double_ko":
+        raise HTTPException(400, "Nur für Doppel-KO verfügbar.")
+    names = {e["id"]: e["name"] for e in await load_entries(db, cid)}
+    st = await _de_state(db, c)
+    if not st:
+        return {"ready": False, "matches": []}
+    nodes, by, occ, winner = st["nodes"], st["by"], st["occ"], st["winner"]
+    out = []
+    for nid in nodes:
+        phase, r, i = nid.split(":")
+        row = by.get(nid)
+        h, a = occ.get(nid, (None, None))
+        w = winner.get(nid)
+        out.append({"node": nid, "phase": phase, "round": int(r), "index": int(i),
+                    "id": row["id"] if row else None,
+                    "home": h, "away": a, "home_name": names.get(h), "away_name": names.get(a),
+                    "winner": w, "winner_name": names.get(w),
+                    "sets": [[s["home_points"], s["away_points"]] for s in (row["sets"] if row else [])],
+                    "walkover": row["walkover"] if row else None,
+                    "reset": nid == "gf:1:0"})
+    return {"ready": True,
+            "wb_rounds": st["meta"]["wb_rounds"], "lb_rounds": st["meta"]["lb_rounds"],
+            "reset_active": st["reset_active"],
+            "champion": st["champion"], "champion_name": names.get(st["champion"]),
+            "runner_up": st["runner_up"], "runner_up_name": names.get(st["runner_up"]),
+            "third": st["third"], "third_name": names.get(st["third"]),
+            "matches": out}
 
 
 # ---- Gruppe -> KO -------------------------------------------------------------
