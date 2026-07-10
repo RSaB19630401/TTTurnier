@@ -459,14 +459,16 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
 
 function DoubleBracketView({de,c,edit,setEdit,saveResult,maxK}){
   const matchCell=(m)=><div className="bmatch" key={m.node}>
-    <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name||<i className="muted">…</i>}</span></div>
-    <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name||<i className="muted">…</i>}</span></div>
-    {m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
-      {(edit===m.id || !m.winner)
-        ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
-        : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
-            {m.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
-    </div>}
+    <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span></div>
+    <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span></div>
+    {m.bye
+      ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>kampflos weiter</div>
+      : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
+          {(edit===m.id || !m.winner)
+            ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
+            : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
+                {m.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
+        </div>)}
   </div>;
   const cols=(list)=>{
     const rounds=[...new Set(list.map(m=>m.round))].sort((a,b)=>a-b);
