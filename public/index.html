@@ -63,13 +63,51 @@ const LET="ABCDEFGHIJKLMNOP";
 async function api(path,method="GET",body){
   const r=await fetch("/api"+path,{method,headers:{"Content-Type":"application/json"},
     body:body?JSON.stringify(body):undefined});
+  if(r.status===401){ const err=new Error("Nicht angemeldet."); err.unauthorized=true; throw err; }
   if(!r.ok){ const e=await r.json().catch(()=>({detail:r.statusText})); throw new Error(e.detail||"Fehler"); }
   return r.json();
+}
+
+function Login({onOk}){
+  const [user,setUser]=useState(""); const [pw,setPw]=useState("");
+  const [err,setErr]=useState(""); const [busy,setBusy]=useState(false);
+  const submit=async()=>{
+    setBusy(true); setErr("");
+    try{ await api("/login","POST",{user:user.trim(),password:pw}); onOk(); }
+    catch(e){ setErr(e.message||"Anmeldung fehlgeschlagen."); }
+    finally{ setBusy(false); }
+  };
+  return <main><div className="wrap" style={{maxWidth:420,marginTop:60}}>
+    <div className="card"><h3>Anmeldung</h3><div className="body">
+      <label>Benutzer</label>
+      <input value={user} onChange={e=>setUser(e.target.value)} autoFocus
+        onKeyDown={e=>e.key==="Enter"&&submit()}/>
+      <label style={{marginTop:10,display:"block"}}>Passwort</label>
+      <input type="password" value={pw} onChange={e=>setPw(e.target.value)}
+        onKeyDown={e=>e.key==="Enter"&&submit()}/>
+      {err && <div style={{color:"#b91c1c",fontSize:13,marginTop:10}}>{err}</div>}
+      <div style={{marginTop:14}}>
+        <button className="btn" onClick={submit} disabled={busy||!user||!pw}>
+          {busy?"…":"Anmelden"}</button>
+      </div>
+    </div></div>
+  </div></main>;
 }
 
 function App(){
   const [tab,setTab]=useState("comp");
   const [openComp,setOpenComp]=useState(null);
+  const [auth,setAuth]=useState(null);   // null = wird geprüft
+  useEffect(()=>{ fetch("/api/session").then(r=>r.json())
+    .then(s=>setAuth(s.configured ? s.authenticated : "unconfigured"))
+    .catch(()=>setAuth(false)); },[]);
+  const logout=async()=>{ try{ await api("/logout","POST"); }catch(e){} setAuth(false); };
+  if(auth===null) return <main><div className="wrap"><div className="muted" style={{marginTop:40}}>lädt…</div></div></main>;
+  if(auth==="unconfigured") return <main><div className="wrap"><div className="card"><div className="body">
+    <b>Anmeldung nicht konfiguriert.</b>
+    <div className="muted" style={{fontSize:13,marginTop:6}}>Im Cloudflare-Dashboard fehlt das Secret <code>APP_PASSWORD</code>.</div>
+  </div></div></div></main>;
+  if(!auth) return <Login onOk={()=>setAuth(true)}/>;
   return <>
     <header><div className="wrap">
       <div className="top">
@@ -81,6 +119,7 @@ function App(){
             <button key={k} className={"tab"+(tab===k?" on":"")}
               onClick={()=>{setTab(k);setOpenComp(null)}}>{l}</button>)}
         </div>
+        <button className="tab" style={{marginLeft:"auto"}} onClick={logout}>Abmelden</button>
       </div>
     </div></header>
     <main><div className="wrap">
