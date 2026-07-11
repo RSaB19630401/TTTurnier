@@ -156,18 +156,20 @@ function Clubs(){
 // ------------------------------------------------------------------- Spieler --
 function Players(){
   const [items,setItems]=useState([]); const [clubs,setClubs]=useState([]);
-  const [f,setF]=useState({first_name:"",last_name:"",club_id:"",sex:""});
+  const [f,setF]=useState({first_name:"",last_name:"",club_id:"",sex:"",birth_year:""});
   const [edit,setEdit]=useState(null);   // id des in Bearbeitung befindlichen Spielers
   const [ef,setEf]=useState({});         // Formularwerte der Bearbeitung
   const load=()=>Promise.all([api("/players"),api("/clubs")]).then(([p,c])=>{setItems(p);setClubs(c)});
   useEffect(()=>{load()},[]);
   const add=async()=>{ if(!f.first_name.trim()&&!f.last_name.trim())return;
-    await api("/players","POST",{...f,club_id:f.club_id?Number(f.club_id):null});
-    setF({first_name:"",last_name:"",club_id:f.club_id,sex:""});load(); };
+    await api("/players","POST",{...f,club_id:f.club_id?Number(f.club_id):null,
+      birth_year:f.birth_year?Number(f.birth_year):null});
+    setF({first_name:"",last_name:"",club_id:f.club_id,sex:"",birth_year:""});load(); };
   const del=async id=>{await api("/players/"+id,"DELETE");load()};
   const startEdit=p=>{ setEdit(p.id); setEf({first_name:p.first_name,last_name:p.last_name,
-    club_id:p.club_id?String(p.club_id):"",sex:p.sex||""}); };
-  const saveEdit=async id=>{ await api("/players/"+id,"PUT",{...ef,club_id:ef.club_id?Number(ef.club_id):null});
+    club_id:p.club_id?String(p.club_id):"",sex:p.sex||"",birth_year:p.birth_year?String(p.birth_year):""}); };
+  const saveEdit=async id=>{ await api("/players/"+id,"PUT",{...ef,club_id:ef.club_id?Number(ef.club_id):null,
+      birth_year:ef.birth_year?Number(ef.birth_year):null});
     setEdit(null); load(); };
   return <div className="card"><h3>Spieler</h3><div className="body">
     <div className="row" style={{marginBottom:14}}>
@@ -178,9 +180,12 @@ function Players(){
         <option value="">—</option>{clubs.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
       <div><label>m/w</label><select value={f.sex} onChange={e=>setF({...f,sex:e.target.value})}>
         <option value="">—</option><option value="m">m</option><option value="w">w</option></select></div>
+      <div><label>Geburtsjahr</label><input type="number" style={{width:100}} placeholder="—"
+        value={f.birth_year} onChange={e=>setF({...f,birth_year:e.target.value})}
+        onKeyDown={e=>e.key==="Enter"&&add()}/></div>
       <button className="btn" onClick={add}>+ Spieler</button>
     </div>
-    <table><thead><tr><th>Name</th><th>Verein</th><th>m/w</th><th></th></tr></thead><tbody>
+    <table><thead><tr><th>Name</th><th>Verein</th><th>m/w</th><th>Jahrgang</th><th></th></tr></thead><tbody>
       {items.map(p=> edit===p.id
         ? <tr key={p.id} style={{background:"#fff7ed"}}>
             <td><input style={{width:80}} value={ef.first_name} onChange={e=>setEf({...ef,first_name:e.target.value})}/>
@@ -189,11 +194,14 @@ function Players(){
                 <option value="">—</option>{clubs.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></td>
             <td><select value={ef.sex} onChange={e=>setEf({...ef,sex:e.target.value})}>
                 <option value="">—</option><option value="m">m</option><option value="w">w</option></select></td>
+            <td><input type="number" style={{width:80}} value={ef.birth_year}
+                onChange={e=>setEf({...ef,birth_year:e.target.value})}/></td>
             <td style={{textAlign:"right",whiteSpace:"nowrap"}}>
                 <button className="btn blue" onClick={()=>saveEdit(p.id)}>Speichern</button>{" "}
                 <button className="btn ghost" onClick={()=>setEdit(null)}>Abbrechen</button></td></tr>
         : <tr key={p.id}><td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
-            <td>{p.sex||"—"}</td><td style={{textAlign:"right",whiteSpace:"nowrap"}}>
+            <td>{p.sex||"—"}</td><td className="muted">{p.birth_year||"—"}</td>
+            <td style={{textAlign:"right",whiteSpace:"nowrap"}}>
               <button className="btn ghost" onClick={()=>startEdit(p)}>Bearbeiten</button>{" "}
               <button className="del" onClick={()=>del(p.id)}>🗑</button></td></tr>)}
     </tbody></table>
@@ -336,6 +344,7 @@ function FullBracketView({c,flash}){
 // -------------------------------------------------------- Schweizer System: Setup
 function SwissSetup({c,players,onDone,flash}){
   const [sel,setSel]=useState({}); const [seed,setSeed]=useState({}); const [hc,setHc]=useState({});
+  const flt=usePlayerFilter(); const shown=players.filter(flt.match);
   const chosen=players.filter(p=>sel[p.id]);
   const n=chosen.length;
   const maxR = n<3?0:Math.max(1, n%2===0 ? n-3 : n-2);
@@ -354,8 +363,9 @@ function SwissSetup({c,players,onDone,flash}){
         ? "Runde 1 wird nach Setzung gepaart – kreuze die gesetzten Spieler an (stärkere Hälfte)."
         : "Runde 1 wird zufällig ausgelost."}
     </div>
+    {flt.bar}
     <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th>{c.pairing==="seeded" && <th>Gesetzt</th>}{c.handicap_enabled && <th>Vorgabe</th>}</tr></thead><tbody>
-      {players.map(p=><tr key={p.id}>
+      {shown.map(p=><tr key={p.id}>
         <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>setSel(s=>({...s,[p.id]:!s[p.id]}))}/></td>
         <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
         {c.pairing==="seeded" && <td>{sel[p.id] && <input type="checkbox" checked={!!seed[p.id]}
@@ -418,6 +428,7 @@ function SwissPlay({c,flash}){
 // ----------------------------------------------------------- Super-Mêlée: Setup
 function MeleeSetup({c,players,onDone,flash}){
   const [sel,setSel]=useState({});
+  const flt=usePlayerFilter(); const shown=players.filter(flt.match);
   const chosen=players.filter(p=>sel[p.id]);
   const n=chosen.length;
   const evenOk=n>=4 && n%2===0;
@@ -430,8 +441,9 @@ function MeleeSetup({c,players,onDone,flash}){
   };
   return <div className="card"><h3>Teilnehmer wählen (Super-Mêlée)</h3><div className="body">
     <div className="muted" style={{marginBottom:8,fontSize:13}}>Gerade Teilnehmerzahl (mind. 4). Es sind {c.round_count} Runden eingestellt – möglich sind höchstens (Teilnehmer − 1) Runden.</div>
+    {flt.bar}
     <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th></tr></thead><tbody>
-      {players.map(p=><tr key={p.id}>
+      {shown.map(p=><tr key={p.id}>
         <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>setSel(s=>({...s,[p.id]:!s[p.id]}))}/></td>
         <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td></tr>)}
     </tbody></table>
@@ -522,6 +534,7 @@ function CompDetail({id,onBack}){
 
 function Setup({c,players,onDone,flash}){
   const [sel,setSel]=useState({}); const [seed,setSeed]=useState({}); const [hc,setHc]=useState({});
+  const flt=usePlayerFilter(); const shown=players.filter(flt.match);
   const toggle=(id)=>setSel(s=>({...s,[id]:!s[id]}));
   const tSeed=(id)=>setSeed(s=>({...s,[id]:!s[id]}));
   const chosen=players.filter(p=>sel[p.id]);
@@ -543,8 +556,9 @@ function Setup({c,players,onDone,flash}){
   };
   return <div className="card"><h3>Teilnehmer & Setzung</h3><div className="body">
     <div className="muted" style={{marginBottom:8,fontSize:13}}>Ankreuzen, wer mitspielt. „Gesetzt" hält Spieler bei der Auslosung getrennt.</div>
+    {flt.bar}
     <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th><th>Gesetzt</th>{c.handicap_enabled && <th>Vorgabe</th>}</tr></thead><tbody>
-      {players.map(p=><tr key={p.id}>
+      {shown.map(p=><tr key={p.id}>
         <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>toggle(p.id)}/></td>
         <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
         <td>{sel[p.id] && <input type="checkbox" checked={!!seed[p.id]} onChange={()=>tSeed(p.id)}/>}</td>
@@ -563,8 +577,9 @@ function Setup({c,players,onDone,flash}){
 // ------------------------------------------------------------- Doppel: feste Paare
 function SetupDoublesFixed({c,players,onDone,flash}){
   const [pairs,setPairs]=useState([]); const [a,setA]=useState(""); const [b,setB]=useState("");
+  const flt=usePlayerFilter();
   const used=new Set(pairs.flatMap(p=>[p.a,p.b]));
-  const avail=players.filter(p=>!used.has(p.id));
+  const avail=players.filter(p=>!used.has(p.id) && flt.match(p));
   const nameOf=id=>{const p=players.find(x=>x.id===id);return p?p.name:id;};
   const add=()=>{ if(!a||!b||a===b)return; setPairs([...pairs,{a:+a,b:+b,seeded:false,hc:0}]); setA("");setB(""); };
   const rm=i=>setPairs(pairs.filter((_,j)=>j!==i));
@@ -579,6 +594,7 @@ function SetupDoublesFixed({c,players,onDone,flash}){
     }catch(e){flash(e.message)}
   };
   return <div className="card"><h3>Doppel bilden (feste Paare)</h3><div className="body">
+    {flt.bar}
     <div className="row" style={{marginBottom:12}}>
       <div><label>Spieler 1</label><select value={a} onChange={e=>setA(e.target.value)}>
         <option value="">—</option>{avail.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
@@ -605,6 +621,7 @@ function SetupDoublesDraw({c,players,onDone,flash}){
   const paired = c.entries.length>0 && c.entries.every(e=>(e.name||"").includes(" / "));
   const [sel,setSel]=useState({}); const [seed,setSeed]=useState({});
   const [koSeed,setKoSeed]=useState({}); const [koHc,setKoHc]=useState({});
+  const flt=usePlayerFilter(); const shown=players.filter(flt.match);
   useEffect(()=>{ if(paired){ const init={}; c.entries.forEach(e=>{if(e.seeded)init[e.id]=true;}); setKoSeed(init);} },[paired,c.id]);
   const chosen=players.filter(p=>sel[p.id]);
   const seededCount=chosen.filter(p=>seed[p.id]).length;
@@ -626,8 +643,9 @@ function SetupDoublesDraw({c,players,onDone,flash}){
   };
   if(!paired) return <div className="card"><h3>Teilnehmer &amp; stärkere Hälfte</h3><div className="body">
     <div className="muted" style={{marginBottom:8,fontSize:13}}>Wähle alle Teilnehmer und kreuze die <b>stärkere Hälfte</b> als „gesetzt" an. Jeder Gesetzte erhält einen zufälligen ungesetzten Partner (beide Hälften müssen gleich groß sein).</div>
+    {flt.bar}
     <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th><th>Gesetzt</th></tr></thead><tbody>
-      {players.map(p=><tr key={p.id}>
+      {shown.map(p=><tr key={p.id}>
         <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>setSel(s=>({...s,[p.id]:!s[p.id]}))}/></td>
         <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
         <td>{sel[p.id] && <input type="checkbox" checked={!!seed[p.id]} onChange={()=>setSeed(s=>({...s,[p.id]:!s[p.id]}))}/>}</td>
@@ -645,6 +663,34 @@ function SetupDoublesDraw({c,players,onDone,flash}){
       <label style={{fontSize:12}}><input type="checkbox" checked={!!koSeed[e.id]} onChange={()=>setKoSeed(s=>({...s,[e.id]:!s[e.id]}))}/> gesetzt</label></div>)}
     <div style={{marginTop:14}}><button className="btn" onClick={doDraw} disabled={c.entries.length<2}>KO auslosen ({c.entries.length} Doppel)</button></div>
   </div></div>;
+}
+
+// Teilnehmerfilter: Altersklasse (nach Geburtsjahr, erwachsen ab 18) und Geschlecht.
+// Spieler ohne Angabe erscheinen nur bei "alle".
+function usePlayerFilter(){
+  const [age,setAge]=useState("all"); const [sex,setSex]=useState("all");
+  const year=new Date().getFullYear();
+  const match=p=>{
+    if(age!=="all"){
+      if(!p.birth_year) return false;                 // ohne Jahrgang nur bei "alle"
+      const alter=year-p.birth_year;
+      if(age==="adult" && alter<18) return false;
+      if(age==="youth" && alter>=18) return false;
+    }
+    if(sex!=="all" && (p.sex||"")!==sex) return false;
+    return true;
+  };
+  const bar=<div className="row" style={{marginBottom:10}}>
+    <div><label>Altersklasse</label>
+      <select value={age} onChange={e=>setAge(e.target.value)}>
+        <option value="all">alle</option><option value="adult">Erwachsene</option><option value="youth">Jugendliche</option>
+      </select></div>
+    <div><label>Geschlecht</label>
+      <select value={sex} onChange={e=>setSex(e.target.value)}>
+        <option value="all">alle</option><option value="m">m</option><option value="w">w</option>
+      </select></div>
+  </div>;
+  return {match, bar};
 }
 
 // Vorgabe: höhere Vorgabe = schwächer -> erhält die Differenz je Satz als Vorsprung
