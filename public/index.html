@@ -162,15 +162,21 @@ function Players(){
   const load=()=>Promise.all([api("/players"),api("/clubs")]).then(([p,c])=>{setItems(p);setClubs(c)});
   useEffect(()=>{load()},[]);
   const add=async()=>{ if(!f.first_name.trim()&&!f.last_name.trim())return;
-    await api("/players","POST",{...f,club_id:f.club_id?Number(f.club_id):null,
-      birth_year:f.birth_year?Number(f.birth_year):null});
-    setF({first_name:"",last_name:"",club_id:f.club_id,sex:"",birth_year:""});load(); };
-  const del=async id=>{await api("/players/"+id,"DELETE");load()};
+    try{
+      await api("/players","POST",{...f,club_id:f.club_id?Number(f.club_id):null,
+        birth_year:f.birth_year?Number(f.birth_year):null});
+      setF({first_name:"",last_name:"",club_id:f.club_id,sex:"",birth_year:""}); load();
+    }catch(e){ alert("Speichern fehlgeschlagen: "+(e.message||"unbekannter Fehler")); } };
+  const del=async id=>{ try{ await api("/players/"+id,"DELETE"); load(); }
+    catch(e){ alert("Löschen fehlgeschlagen: "+(e.message||"unbekannter Fehler")); } };
   const startEdit=p=>{ setEdit(p.id); setEf({first_name:p.first_name,last_name:p.last_name,
     club_id:p.club_id?String(p.club_id):"",sex:p.sex||"",birth_year:p.birth_year?String(p.birth_year):""}); };
-  const saveEdit=async id=>{ await api("/players/"+id,"PUT",{...ef,club_id:ef.club_id?Number(ef.club_id):null,
-      birth_year:ef.birth_year?Number(ef.birth_year):null});
-    setEdit(null); load(); };
+  const saveEdit=async id=>{
+    try{
+      await api("/players/"+id,"PUT",{...ef,club_id:ef.club_id?Number(ef.club_id):null,
+        birth_year:ef.birth_year?Number(ef.birth_year):null});
+      setEdit(null); load();
+    }catch(e){ alert("Speichern fehlgeschlagen: "+(e.message||"unbekannter Fehler")); } };
   return <div className="card"><h3>Spieler</h3><div className="body">
     <div className="row" style={{marginBottom:14}}>
       <div><label>Vorname</label><input value={f.first_name} onChange={e=>setF({...f,first_name:e.target.value})}/></div>
@@ -325,9 +331,10 @@ function FullBracketView({c,flash}){
       {g.list.sort((a,b)=>a.index-b.index).map(m=><div key={m.node} className="list-item" style={{alignItems:"center"}}>
         <div style={{flex:1}}>
           <span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
+          <Hcp c={c} meId={m.home} otherId={m.away}/>
           <span className="muted"> vs </span>
           <span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
-          {" "}<Vorgabe c={c} homeId={m.home} awayId={m.away} homeName={m.home_name} awayName={m.away_name}/>
+          <Hcp c={c} meId={m.away} otherId={m.home}/>
         </div>
         {m.bye
           ? <span className="pill">Freilos · kampflos weiter</span>
@@ -412,9 +419,10 @@ function SwissPlay({c,flash}){
       {rd.games.map(g=><div key={g.id} className="list-item" style={{alignItems:"center"}}>
         <div style={{flex:1}}>
           <span className={g.winner===g.home?"win":""}>{g.home_name}</span>
+          <Hcp c={c} meId={g.home} otherId={g.away}/>
           <span className="muted"> vs </span>
           <span className={g.winner===g.away?"win":""}>{g.away_name}</span>
-          {" "}<Vorgabe c={c} homeId={g.home} awayId={g.away} homeName={g.home_name} awayName={g.away_name}/>
+          <Hcp c={c} meId={g.away} otherId={g.home}/>
         </div>
         {(edit===g.id || !g.complete)
           ? <SetEntry sets={g.sets} maxSets={maxG} walkover={g.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(g.id,b)}/>
@@ -694,15 +702,13 @@ function usePlayerFilter(){
 }
 
 // Vorgabe: höhere Vorgabe = schwächer -> erhält die Differenz je Satz als Vorsprung
-function Vorgabe({c,homeId,awayId,homeName,awayName}){
-  if(!c.handicap_enabled || !homeId || !awayId) return null;
+function Hcp({c,meId,otherId}){
+  if(!c.handicap_enabled || !meId || !otherId) return null;
   const map={}; (c.entries||[]).forEach(e=>{map[e.id]=e.handicap||0;});
-  const h=map[homeId]||0, a=map[awayId]||0;
-  if(h===a) return <span className="pill" title="gleiche Vorgabe">Vorgabe 0</span>;
-  const d=Math.abs(h-a);
-  const who = h>a ? (homeName||"Heim") : (awayName||"Gast");
-  return <span className="pill" style={{background:"#fff7ed",color:"#9a3412",borderColor:"#fdba74"}}
-    title="Vorsprung je Satz">Vorgabe: {who} +{d} je Satz</span>;
+  const me=map[meId]||0, other=map[otherId]||0;
+  if(me<=other) return null;              // nur der Schwächere (höhere Vorgabe) bekommt Vorsprung
+  return <span className="pill" style={{background:"#fff7ed",color:"#9a3412",borderColor:"#fdba74",marginLeft:6}}
+    title="Vorsprung je Satz">+{me-other} je Satz</span>;
 }
 
 const TARGET_POINTS = 11;  // feste Zielpunktzahl je Satz
@@ -786,11 +792,10 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
 
 function DoubleBracketView({de,c,edit,setEdit,saveResult,maxK}){
   const matchCell=(m)=><div className="bmatch" key={m.node}>
-    <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span></div>
-    <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span></div>
-    {!m.bye && m.home && m.away && c.handicap_enabled &&
-      <div className="bslot" style={{background:"#fff7ed"}}>
-        <Vorgabe c={c} homeId={m.home} awayId={m.away} homeName={m.home_name} awayName={m.away_name}/></div>}
+    <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
+      <Hcp c={c} meId={m.home} otherId={m.away}/></div>
+    <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
+      <Hcp c={c} meId={m.away} otherId={m.home}/></div>
     {m.bye
       ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>kampflos weiter</div>
       : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
@@ -885,11 +890,11 @@ function Play({c,onChange,flash}){
       <div className="card"><h3>Spielplan – Gruppe {LET[grp]}</h3><div className="body">
         {groupMatches.map(m=><div key={m.id} className="list-item">
           <span className="muted" style={{width:34,fontFamily:"monospace"}}>R{m.round_no}</span>
-          <div style={{flex:1,textAlign:"right"}}><span className={m.complete&&m.winner===m.home?"win":""}>{m.home_name}</span></div>
+          <div style={{flex:1,textAlign:"right"}}><span className={m.complete&&m.winner===m.home?"win":""}>{m.home_name}</span>
+            <Hcp c={c} meId={m.home} otherId={m.away}/></div>
           <span className="muted">vs</span>
           <div style={{flex:1}}><span className={m.complete&&m.winner===m.away?"win":""}>{m.away_name}</span>
-            {c.handicap_enabled && <> <Vorgabe c={c} homeId={m.home} awayId={m.away} homeName={m.home_name} awayName={m.away_name}/></>}
-          </div>
+            <Hcp c={c} meId={m.away} otherId={m.home}/></div>
           {(edit===m.id || !m.complete)
             ? <SetEntry sets={m.sets} maxSets={maxG} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(m.id,b)}/>
             : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
@@ -932,13 +937,13 @@ function Play({c,onChange,flash}){
           return <div key={r} className="bcol">
             <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:1,color:"var(--blue)",fontWeight:700,textAlign:"center"}}>{nm}</div>
             {ms.map(m=><div key={m.id} className="bmatch">
-              <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name||<i className="muted">wartet…</i>}</span></div>
-              <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name||<i className="muted">wartet…</i>}</span></div>
+              <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name||<i className="muted">wartet…</i>}</span>
+                <Hcp c={c} meId={m.home} otherId={m.away}/></div>
+              <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name||<i className="muted">wartet…</i>}</span>
+                <Hcp c={c} meId={m.away} otherId={m.home}/></div>
               {m.bye
                 ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>Freilos</div>
                 : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
-                    {c.handicap_enabled && <div style={{marginBottom:4}}>
-                      <Vorgabe c={c} homeId={m.home} awayId={m.away} homeName={m.home_name} awayName={m.away_name}/></div>}
                     {(edit===m.id || !m.winner)
                       ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
                       : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
