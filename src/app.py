@@ -96,7 +96,7 @@ async def load_matches(db, cid) -> list[dict]:
 
 def comp_dto(c: dict, entries=None):
     d = {"id": c["id"], "name": c["name"], "mode": c["mode"],
-         "mode_label": MODES[c["mode"]]["label"], "kind": mode_kind(c["mode"]),
+         "mode_label": (MODES.get(c["mode"]) or {}).get("label", c["mode"]), "kind": mode_kind(c["mode"]),
          "sets_to_win": c["sets_to_win"], "points_per_set": c["points_per_set"],
          "group_count": effective_group_count(c["mode"], c["group_count"]),
          "advance_per_group": c["advance_per_group"], "ko_sets_to_win": c["ko_sets_to_win"],
@@ -206,8 +206,11 @@ async def list_comps(db=Depends(get_db)):
 async def create_comp(body: CompIn, db=Depends(get_db)):
     if body.mode not in MODES:
         raise HTTPException(400, "Unbekannter Modus")
-    if not MODES[body.mode]["implemented"]:
-        raise HTTPException(400, f"Modus „{MODES[body.mode]['label']}“ ist geplant, aber noch nicht aktiv.")
+    m = MODES.get(body.mode)
+    if not m:
+        raise HTTPException(400, "Unbekannter Modus.")
+    if not m["implemented"]:
+        raise HTTPException(400, f"Modus „{m['label']}“ ist geplant, aber noch nicht aktiv.")
     if body.score_mode not in ("points", "sets"):
         raise HTTPException(400, "Ungültiger Wertungsmodus.")
     ctype = body.competition_type if body.competition_type in ("single", "double") else "single"
