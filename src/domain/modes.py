@@ -28,8 +28,8 @@ MODES: dict[str, dict] = {
                      "hint": "Platzierungsspiele für alle Ränge."},
     "melee":        {"label": "Mêlée", "kind": "melee", "implemented": False,
                      "hint": "Zufallsdoppel, individuelle Wertung."},
-    "super_melee":  {"label": "Super-Mêlée", "kind": "super_melee", "implemented": False,
-                     "hint": "Mêlée mit wechselnden Partnern je Runde."},
+    "super_melee":  {"label": "Super-Mêlée", "kind": "super_melee", "implemented": True,
+                     "hint": "Zufällige Doppel je Runde, nie derselbe Partner, individuelle Wertung."},
 }
 
 
