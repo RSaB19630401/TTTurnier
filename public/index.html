@@ -165,7 +165,7 @@ function Players(){
 // -------------------------------------------------------------- Wettbewerbe --
 function Comps({onOpen}){
   const [items,setItems]=useState([]); const [modes,setModes]=useState([]);
-  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3,score_mode:"points",competition_type:"single",pairing:"fixed"});
+  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3,score_mode:"points",competition_type:"single",pairing:"fixed",round_count:5});
   const load=()=>Promise.all([api("/competitions"),api("/modes")]).then(([c,m])=>{setItems(c);setModes(m)});
   useEffect(()=>{load()},[]);
   const create=async()=>{ if(!f.name.trim())return;
@@ -214,6 +214,8 @@ function Comps({onOpen}){
           onChange={e=>setF({...f,group_count:+e.target.value})}/></div>}
         {kind==="group_ko" && <div><label>Aufsteiger/Gr.</label><input type="number" style={{width:90}} value={f.advance_per_group}
           onChange={e=>setF({...f,advance_per_group:+e.target.value})}/></div>}
+        {kind==="super_melee" && <div><label>Runden</label><input type="number" style={{width:80}} value={f.round_count}
+          onChange={e=>setF({...f,round_count:+e.target.value})}/></div>}
         <div><label>Sätze b. Sieg</label><input type="number" style={{width:90}} value={f.sets_to_win}
           onChange={e=>setF({...f,sets_to_win:+e.target.value})}/></div>
         <div><label>Wertung</label><select value={f.score_mode} onChange={e=>setF({...f,score_mode:e.target.value})}>
@@ -236,6 +238,77 @@ function Comps({onOpen}){
   </>;
 }
 
+// ----------------------------------------------------------- Super-Mêlée: Setup
+function MeleeSetup({c,players,onDone,flash}){
+  const [sel,setSel]=useState({});
+  const chosen=players.filter(p=>sel[p.id]);
+  const n=chosen.length;
+  const evenOk=n>=4 && n%2===0;
+  const roundsOk=c.round_count<=n-1;
+  const start=async()=>{
+    try{
+      await api(`/competitions/${c.id}/entries`,"PUT",{player_ids:chosen.map(p=>p.id),seeded_ids:[]});
+      await api(`/competitions/${c.id}/melee/draw`,"POST"); flash("Runde 1 ausgelost."); onDone();
+    }catch(e){flash(e.message)}
+  };
+  return <div className="card"><h3>Teilnehmer wählen (Super-Mêlée)</h3><div className="body">
+    <div className="muted" style={{marginBottom:8,fontSize:13}}>Gerade Teilnehmerzahl (mind. 4). Es sind {c.round_count} Runden eingestellt – möglich sind höchstens (Teilnehmer − 1) Runden.</div>
+    <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th></tr></thead><tbody>
+      {players.map(p=><tr key={p.id}>
+        <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>setSel(s=>({...s,[p.id]:!s[p.id]}))}/></td>
+        <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td></tr>)}
+    </tbody></table>
+    <div className="muted" style={{fontSize:12,marginTop:6}}>
+      {n} Teilnehmer{n>0 && !evenOk?" – Zahl muss gerade und mindestens 4 sein":""}
+      {evenOk && !roundsOk?` – ${c.round_count} Runden sind zu viele (max. ${n-1})`:""}
+    </div>
+    <div style={{marginTop:14}}><button className="btn" onClick={start} disabled={!evenOk||!roundsOk}>Runde 1 auslosen</button></div>
+  </div></div>;
+}
+
+// ------------------------------------------------------- Super-Mêlée: Spielen
+function MeleePlay({c,flash}){
+  const [st,setSt]=useState(null); const [edit,setEdit]=useState(null);
+  const load=()=>api(`/competitions/${c.id}/melee`).then(setSt);
+  useEffect(()=>{load()},[c.id]);
+  const maxG=c.sets_to_win*2-1;
+  const saveResult=async(mid,body)=>{ try{ await api(`/matches/${mid}/result`,"POST",body); setEdit(null); await load(); }catch(e){flash(e.message)} };
+  const nextRound=async()=>{ try{ await api(`/competitions/${c.id}/melee/draw`,"POST"); flash("Nächste Runde ausgelost."); await load(); }catch(e){flash(e.message)} };
+  if(!st) return <div className="muted">lädt…</div>;
+  return <>
+    <div className="card"><h3>Rangliste</h3><div className="body">
+      <table><thead><tr><th>#</th><th>Name</th><th>Punkte</th><th>{st.score_mode==="sets"?"Satzdiff.":"Balldiff."}</th><th>Spiele</th></tr></thead>
+        <tbody>{st.standings.map(r=><tr key={r.player}>
+          <td><span className="badge" style={{background:r.rank<=3?"#059669":"#94a3b8"}}>{r.rank}</span></td>
+          <td><b>{r.name}</b></td>
+          <td style={{fontWeight:800,color:"var(--blue)"}}>{r.points}</td>
+          <td className="muted">{r.diff>0?"+"+r.diff:r.diff}</td><td className="muted">{r.games}</td></tr>)}
+        </tbody></table>
+      <div className="muted" style={{fontSize:11,marginTop:6}}>Sieg 2 · Freilos 1 · Niederlage 0 · Feinwertung nach Differenz</div>
+    </div></div>
+
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+      <span className="muted">Runde {st.played} von {st.round_count}</span>
+      {st.can_draw && <button className="btn" onClick={nextRound}>Nächste Runde auslosen</button>}
+      {!st.can_draw && st.played>=st.round_count && <span className="pill">alle Runden gespielt</span>}
+    </div>
+
+    {[...st.rounds].reverse().map(rd=><div key={rd.round} className="card"><h3>Runde {rd.round}</h3><div className="body">
+      {rd.games.map(g=><div key={g.id} className="list-item" style={{alignItems:"center"}}>
+        <div style={{flex:1}}>
+          <span className={g.winner==="home"?"win":""}>{g.home_name}</span>
+          <span className="muted"> vs </span>
+          <span className={g.winner==="away"?"win":""}>{g.away_name}</span>
+        </div>
+        {(edit===g.id || !g.complete)
+          ? <SetEntry sets={g.sets} maxSets={maxG} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(g.id,b)}/>
+          : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(g.id)}>{g.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
+      </div>)}
+      {rd.bye && <div className="list-item"><span style={{flex:1}}><b>{rd.bye.name}</b></span><span className="pill">Freilos · je 1 Punkt</span></div>}
+    </div></div>)}
+  </>;
+}
+
 // ----------------------------------------------------------- Wettbewerb-Detail
 function CompDetail({id,onBack}){
   const [c,setC]=useState(null); const [players,setPlayers]=useState([]);
@@ -250,13 +323,17 @@ function CompDetail({id,onBack}){
       <b style={{fontSize:17}}>{c.name}</b><span className="pill">{c.mode_label}</span><span className="pill">{c.status}</span>
     </div>
     {msg && <div className="flash">{msg}</div>}
-    {c.status==="setup"
-      ? (c.competition_type==="double"
-          ? (c.pairing==="fixed"
-              ? <SetupDoublesFixed c={c} players={players} onDone={()=>reload()} flash={flash}/>
-              : <SetupDoublesDraw c={c} players={players} onDone={()=>reload()} flash={flash}/>)
-          : <Setup c={c} players={players} onDone={()=>{reload()}} flash={flash}/>)
-      : <Play c={c} onChange={reload} flash={flash}/>}
+    {c.kind==="super_melee"
+      ? (c.status==="setup"
+          ? <MeleeSetup c={c} players={players} onDone={()=>reload()} flash={flash}/>
+          : <MeleePlay c={c} flash={flash}/>)
+      : (c.status==="setup"
+          ? (c.competition_type==="double"
+              ? (c.pairing==="fixed"
+                  ? <SetupDoublesFixed c={c} players={players} onDone={()=>reload()} flash={flash}/>
+                  : <SetupDoublesDraw c={c} players={players} onDone={()=>reload()} flash={flash}/>)
+              : <Setup c={c} players={players} onDone={()=>{reload()}} flash={flash}/>)
+          : <Play c={c} onChange={reload} flash={flash}/>)}
   </>;
 }
 
