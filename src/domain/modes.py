@@ -24,10 +24,8 @@ MODES: dict[str, dict] = {
                      "hint": "Paarung nach Punktgleichheit, nie derselbe Gegner, Buchholz-Wertung."},
     "double_ko":    {"label": "Doppel-KO", "kind": "double_ko", "implemented": True,
                      "hint": "Doppelte Ausscheidung: Winner-/Loser-Bracket, Grand Final mit Reset."},
-    "full_ko":      {"label": "Vollständiges KO", "kind": "full_ko", "implemented": False,
-                     "hint": "Platzierungsspiele für alle Ränge."},
-    "melee":        {"label": "Mêlée", "kind": "melee", "implemented": False,
-                     "hint": "Zufallsdoppel, individuelle Wertung."},
+    "full_ko":      {"label": "Vollständiges KO", "kind": "full_ko", "implemented": True,
+                     "hint": "Platzierungsspiele: jeder Platz wird ausgespielt (Obergrenze wählbar)."},
     "super_melee":  {"label": "Super-Mêlée", "kind": "super_melee", "implemented": True,
                      "hint": "Doppel mit wechselnden Partnern: Spieler einzeln melden, nie derselbe Partner, Einzelwertung."},
 }
