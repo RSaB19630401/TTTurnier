@@ -68,7 +68,7 @@ async def get_comp(db, cid) -> dict:
 
 async def load_entries(db, cid) -> list[dict]:
     rows = await db.query(
-        """SELECT e.id, e.seeded, e.seed_no, e.group_no, e.bracket_slot,
+        """SELECT e.id, e.seeded, e.seed_no, e.group_no, e.bracket_slot, e.handicap,
                   COALESCE(GROUP_CONCAT(p.first_name || ' ' || p.last_name, ' / '), 'Meldung ' || e.id) AS name,
                   MIN(p.club_id) AS club_id
            FROM entries e
@@ -102,11 +102,12 @@ def comp_dto(c: dict, entries=None):
          "advance_per_group": c["advance_per_group"], "ko_sets_to_win": c["ko_sets_to_win"],
          "status": c["status"], "score_mode": c["score_mode"],
          "competition_type": c["competition_type"], "pairing": c["pairing"],
-         "round_count": c["round_count"]}
+         "round_count": c["round_count"], "handicap_enabled": bool(c["handicap_enabled"])}
     if entries is not None:
         d["entries"] = [{"id": e["id"], "seeded": e["seeded"], "seed_no": e["seed_no"],
                          "group_no": e["group_no"], "bracket_slot": e["bracket_slot"],
-                         "name": e["name"], "club_id": e["club_id"]} for e in entries]
+                         "name": e["name"], "club_id": e["club_id"],
+                         "handicap": e.get("handicap", 0) or 0} for e in entries]
     return d
 
 
@@ -186,7 +187,8 @@ class CompIn(BaseModel):
     score_mode: str = "points"
     competition_type: str = "single"     # single | double
     pairing: str | None = None           # bei double: fixed | draw
-    round_count: int = 0                  # Super-Mêlée: Anzahl Runden
+    round_count: int = 0                  # Super-Mêlée/Schweizer: Runden; Vollständiges KO: Platz-Obergrenze
+    handicap_enabled: bool = False        # Vorgabeturnier
 
 
 @app.get("/api/modes")
@@ -238,11 +240,12 @@ async def create_comp(body: CompIn, db=Depends(get_db)):
         pairing = body.pairing if body.pairing in ("fixed", "draw") else None
         if pairing is None:
             raise HTTPException(400, "Bitte ein Paarbildungs-Verfahren wählen (feste Paare oder auslosen).")
+    hcap = 1 if (body.handicap_enabled and body.mode != "super_melee") else 0
     cid = await db.execute(
-        """INSERT INTO competitions (name,mode,sets_to_win,points_per_set,group_count,advance_per_group,ko_sets_to_win,status,score_mode,competition_type,pairing,round_count)
-           VALUES (?,?,?,?,?,?,?, 'setup', ?,?,?,?)""",
+        """INSERT INTO competitions (name,mode,sets_to_win,points_per_set,group_count,advance_per_group,ko_sets_to_win,status,score_mode,competition_type,pairing,round_count,handicap_enabled)
+           VALUES (?,?,?,?,?,?,?, 'setup', ?,?,?,?,?)""",
         (body.name, body.mode, body.sets_to_win, body.points_per_set,
-         body.group_count, body.advance_per_group, body.ko_sets_to_win, body.score_mode, ctype, pairing, round_count))
+         body.group_count, body.advance_per_group, body.ko_sets_to_win, body.score_mode, ctype, pairing, round_count, hcap))
     c = await get_comp(db, cid)
     return comp_dto(c, entries=[])
 
@@ -264,9 +267,18 @@ async def delete_comp(cid: int, db=Depends(get_db)):
 
 
 # ---- Teilnehmer & Setzung -----------------------------------------------------
+def _hc(v):
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(11, v))
+
+
 class ParticipantsIn(BaseModel):
     player_ids: list[int]
     seeded_ids: list[int] = []
+    handicaps: dict[str, int] = {}       # player_id -> Vorgabe 0..11
 
 
 @app.put("/api/competitions/{cid}/entries")
@@ -281,8 +293,9 @@ async def set_participants(cid: int, body: ParticipantsIn, db=Depends(get_db)):
         p = await db.query_one("SELECT id FROM players WHERE id=?", (pid,))
         if not p:
             continue
-        eid = await db.execute("INSERT INTO entries (competition_id,seeded) VALUES (?,?)",
-                               (cid, 1 if pid in seedset else 0))
+        hc = _hc(body.handicaps.get(str(pid), 0))
+        eid = await db.execute("INSERT INTO entries (competition_id,seeded,handicap) VALUES (?,?,?)",
+                               (cid, 1 if pid in seedset else 0, hc))
         await db.execute("INSERT INTO entry_members (entry_id,player_id,order_index) VALUES (?,?,0)", (eid, pid))
     return comp_dto(c, entries=await load_entries(db, cid))
 
@@ -296,6 +309,7 @@ async def _delete_entries(db, cid):
 class PairsIn(BaseModel):
     pairs: list[list[int]]        # [[player1, player2], ...]
     seeded: list[int] = []        # Indizes gesetzter Paare
+    handicaps: list[int] = []     # Vorgabe je Paar (gleiche Reihenfolge)
 
 
 @app.put("/api/competitions/{cid}/pairs")
@@ -315,8 +329,9 @@ async def set_pairs(cid: int, body: PairsIn, db=Depends(get_db)):
             seen.add(pid)
     await _delete_entries(db, cid)
     for idx, pr in enumerate(body.pairs):
-        eid = await db.execute("INSERT INTO entries (competition_id,seeded) VALUES (?,?)",
-                               (cid, 1 if idx in set(body.seeded) else 0))
+        hc = _hc(body.handicaps[idx]) if idx < len(body.handicaps) else 0
+        eid = await db.execute("INSERT INTO entries (competition_id,seeded,handicap) VALUES (?,?,?)",
+                               (cid, 1 if idx in set(body.seeded) else 0, hc))
         for oi, pid in enumerate(pr):
             await db.execute("INSERT INTO entry_members (entry_id,player_id,order_index) VALUES (?,?,?)", (eid, pid, oi))
     return comp_dto(c, entries=await load_entries(db, cid))
@@ -353,6 +368,7 @@ async def draw_partners(cid: int, seed: int | None = None, db=Depends(get_db)):
 
 class SeedingIn(BaseModel):
     seeded_entry_ids: list[int] = []
+    handicaps: dict[str, int] = {}       # entry_id -> Vorgabe 0..11
 
 
 @app.put("/api/competitions/{cid}/seeding")
@@ -363,7 +379,12 @@ async def set_seeding(cid: int, body: SeedingIn, db=Depends(get_db)):
     ids = set(body.seeded_entry_ids)
     rows = await db.query("SELECT id FROM entries WHERE competition_id=?", (cid,))
     for r in rows:
-        await db.execute("UPDATE entries SET seeded=? WHERE id=?", (1 if r["id"] in ids else 0, r["id"]))
+        hc = _hc(body.handicaps.get(str(r["id"]), 0)) if body.handicaps else None
+        if hc is None:
+            await db.execute("UPDATE entries SET seeded=? WHERE id=?", (1 if r["id"] in ids else 0, r["id"]))
+        else:
+            await db.execute("UPDATE entries SET seeded=?, handicap=? WHERE id=?",
+                             (1 if r["id"] in ids else 0, hc, r["id"]))
     return comp_dto(c, entries=await load_entries(db, cid))
 
 
