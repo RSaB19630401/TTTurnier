@@ -30,11 +30,12 @@ MODES: dict[str, dict] = {
 
 
 def mode_kind(mode: str) -> str:
-    return MODES[mode]["kind"]
+    m = MODES.get(mode)
+    return m["kind"] if m else "group"   # unbekannter/entfernter Modus: neutral behandeln
 
 
 def effective_group_count(mode: str, group_count: int) -> int:
-    m = MODES[mode]
+    m = MODES.get(mode) or {}
     if m.get("fixed_groups"):
         return m["fixed_groups"]
     return max(1, group_count)
