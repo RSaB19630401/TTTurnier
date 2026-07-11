@@ -29,7 +29,7 @@ MODES: dict[str, dict] = {
     "melee":        {"label": "Mêlée", "kind": "melee", "implemented": False,
                      "hint": "Zufallsdoppel, individuelle Wertung."},
     "super_melee":  {"label": "Super-Mêlée", "kind": "super_melee", "implemented": True,
-                     "hint": "Zufällige Doppel je Runde, nie derselbe Partner, individuelle Wertung."},
+                     "hint": "Doppel mit wechselnden Partnern: Spieler einzeln melden, nie derselbe Partner, Einzelwertung."},
 }
 
 
