@@ -243,8 +243,20 @@ async def delete_club(cid: int, db=Depends(get_db)):
 
 
 # =================================================================== PLAYERS ===
+def _year(v):
+    """Geburtsjahr plausibilisieren; leer/ungültig -> None (= keine Angabe)."""
+    if v in (None, "", 0):
+        return None
+    try:
+        y = int(v)
+    except (TypeError, ValueError):
+        return None
+    return y if 1900 <= y <= 2100 else None
+
+
 class PlayerIn(BaseModel):
     first_name: str; last_name: str; sex: str = ""; club_id: int | None = None; remark: str = ""
+    birth_year: int | None = None
 
 
 @app.get("/api/players")
@@ -258,16 +270,16 @@ async def list_players(db=Depends(get_db)):
 @app.post("/api/players")
 async def create_player(body: PlayerIn, db=Depends(get_db)):
     pid = await db.execute(
-        "INSERT INTO players (club_id,first_name,last_name,sex,remark) VALUES (?,?,?,?,?)",
-        (body.club_id, body.first_name, body.last_name, body.sex, body.remark))
+        "INSERT INTO players (club_id,first_name,last_name,sex,remark,birth_year) VALUES (?,?,?,?,?,?)",
+        (body.club_id, body.first_name, body.last_name, body.sex, body.remark, _year(body.birth_year)))
     return await db.query_one("SELECT * FROM players WHERE id=?", (pid,))
 
 
 @app.put("/api/players/{pid}")
 async def update_player(pid: int, body: PlayerIn, db=Depends(get_db)):
     await db.execute(
-        "UPDATE players SET club_id=?,first_name=?,last_name=?,sex=?,remark=? WHERE id=?",
-        (body.club_id, body.first_name, body.last_name, body.sex, body.remark, pid))
+        "UPDATE players SET club_id=?,first_name=?,last_name=?,sex=?,remark=?,birth_year=? WHERE id=?",
+        (body.club_id, body.first_name, body.last_name, body.sex, body.remark, _year(body.birth_year), pid))
     return await db.query_one("SELECT * FROM players WHERE id=?", (pid,))
 
 
