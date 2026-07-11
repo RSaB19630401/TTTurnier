@@ -210,13 +210,16 @@ async def create_comp(body: CompIn, db=Depends(get_db)):
     pairing = None
     round_count = 0
     if body.mode == "super_melee":
-        ctype = "single"
+        # Super-Mêlée ist ein Doppelwettbewerb, aber ohne feste Paare:
+        # gemeldet werden einzelne Spieler, die Partner wechseln jede Runde.
+        ctype = "double"
+        pairing = None
         round_count = int(body.round_count)
         if round_count < 1:
             raise HTTPException(400, "Bitte die Anzahl der Runden angeben (mindestens 1).")
-    if ctype == "double":
+    elif ctype == "double":
         if body.mode not in ("ko", "double_ko"):
-            raise HTTPException(400, "Doppel ist derzeit als Einfach-KO oder Doppel-KO verfügbar.")
+            raise HTTPException(400, "Doppel ist als Einfach-KO, Doppel-KO oder Super-Mêlée verfügbar.")
         pairing = body.pairing if body.pairing in ("fixed", "draw") else None
         if pairing is None:
             raise HTTPException(400, "Bitte ein Paarbildungs-Verfahren wählen (feste Paare oder auslosen).")
