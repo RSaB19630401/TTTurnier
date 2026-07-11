@@ -165,7 +165,7 @@ function Players(){
 // -------------------------------------------------------------- Wettbewerbe --
 function Comps({onOpen}){
   const [items,setItems]=useState([]); const [modes,setModes]=useState([]);
-  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3,score_mode:"points",competition_type:"single",pairing:"fixed",round_count:5});
+  const [f,setF]=useState({name:"",mode:"group_ko",sets_to_win:3,points_per_set:11,group_count:2,advance_per_group:2,ko_sets_to_win:3,score_mode:"points",competition_type:"single",pairing:"fixed",round_count:5,handicap_enabled:false});
   const load=()=>Promise.all([api("/competitions"),api("/modes")]).then(([c,m])=>{setItems(c);setModes(m)});
   useEffect(()=>{load()},[]);
   const create=async()=>{ if(!f.name.trim())return;
@@ -221,6 +221,9 @@ function Comps({onOpen}){
               <option value="random">zufällig auslosen</option><option value="seeded">nach Setzung</option>
             </select></div>
         </>}
+        {kind!=="super_melee" && <div><label>Vorgabe</label>
+          <select value={f.handicap_enabled?"1":"0"} onChange={e=>setF({...f,handicap_enabled:e.target.value==="1"})}>
+            <option value="0">ohne</option><option value="1">Vorgabeturnier</option></select></div>}
         {kind==="full_ko" && <div><label>Plätze bis</label><input type="number" style={{width:90}} value={f.round_count}
           placeholder="alle" onChange={e=>setF({...f,round_count:+e.target.value})}/></div>}
         {kind==="super_melee" && <div><label>Runden</label><input type="number" style={{width:80}} value={f.round_count}
@@ -277,6 +280,7 @@ function FullBracketView({c,flash}){
           <span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
           <span className="muted"> vs </span>
           <span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
+          {" "}<Vorgabe c={c} homeId={m.home} awayId={m.away} homeName={m.home_name} awayName={m.away_name}/>
         </div>
         {m.bye
           ? <span className="pill">Freilos · kampflos weiter</span>
@@ -292,7 +296,7 @@ function FullBracketView({c,flash}){
 
 // -------------------------------------------------------- Schweizer System: Setup
 function SwissSetup({c,players,onDone,flash}){
-  const [sel,setSel]=useState({}); const [seed,setSeed]=useState({});
+  const [sel,setSel]=useState({}); const [seed,setSeed]=useState({}); const [hc,setHc]=useState({});
   const chosen=players.filter(p=>sel[p.id]);
   const n=chosen.length;
   const maxR = n<3?0:Math.max(1, n%2===0 ? n-3 : n-2);
@@ -300,7 +304,8 @@ function SwissSetup({c,players,onDone,flash}){
   const start=async()=>{
     try{
       await api(`/competitions/${c.id}/entries`,"PUT",
-        {player_ids:chosen.map(p=>p.id),seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id)});
+        {player_ids:chosen.map(p=>p.id),seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id),
+         handicaps:Object.fromEntries(chosen.map(p=>[String(p.id), +hc[p.id]||0]))});
       await api(`/competitions/${c.id}/swiss/draw`,"POST"); flash("Runde 1 ausgelost."); onDone();
     }catch(e){flash(e.message)}
   };
@@ -310,12 +315,14 @@ function SwissSetup({c,players,onDone,flash}){
         ? "Runde 1 wird nach Setzung gepaart – kreuze die gesetzten Spieler an (stärkere Hälfte)."
         : "Runde 1 wird zufällig ausgelost."}
     </div>
-    <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th>{c.pairing==="seeded" && <th>Gesetzt</th>}</tr></thead><tbody>
+    <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th>{c.pairing==="seeded" && <th>Gesetzt</th>}{c.handicap_enabled && <th>Vorgabe</th>}</tr></thead><tbody>
       {players.map(p=><tr key={p.id}>
         <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>setSel(s=>({...s,[p.id]:!s[p.id]}))}/></td>
         <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
         {c.pairing==="seeded" && <td>{sel[p.id] && <input type="checkbox" checked={!!seed[p.id]}
           onChange={()=>setSeed(s=>({...s,[p.id]:!s[p.id]}))}/>}</td>}
+        {c.handicap_enabled && <td>{sel[p.id] && <input type="number" min="0" max="11" style={{width:60}}
+          value={hc[p.id]??0} onChange={e=>setHc(x=>({...x,[p.id]:Math.max(0,Math.min(11,+e.target.value||0))}))}/>}</td>}
       </tr>)}
     </tbody></table>
     <div className="muted" style={{fontSize:12,marginTop:6}}>
@@ -358,6 +365,7 @@ function SwissPlay({c,flash}){
           <span className={g.winner===g.home?"win":""}>{g.home_name}</span>
           <span className="muted"> vs </span>
           <span className={g.winner===g.away?"win":""}>{g.away_name}</span>
+          {" "}<Vorgabe c={c} homeId={g.home} awayId={g.away} homeName={g.home_name} awayName={g.away_name}/>
         </div>
         {(edit===g.id || !g.complete)
           ? <SetEntry sets={g.sets} maxSets={maxG} walkover={g.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(g.id,b)}/>
@@ -474,18 +482,19 @@ function CompDetail({id,onBack}){
 }
 
 function Setup({c,players,onDone,flash}){
-  const [sel,setSel]=useState({}); const [seed,setSeed]=useState({});
+  const [sel,setSel]=useState({}); const [seed,setSeed]=useState({}); const [hc,setHc]=useState({});
   const toggle=(id)=>setSel(s=>({...s,[id]:!s[id]}));
   const tSeed=(id)=>setSeed(s=>({...s,[id]:!s[id]}));
   const chosen=players.filter(p=>sel[p.id]);
+  const payload=()=>({player_ids:chosen.map(p=>p.id),
+      seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id),
+      handicaps:Object.fromEntries(chosen.map(p=>[String(p.id), +hc[p.id]||0]))});
   const save=async()=>{
-    await api(`/competitions/${c.id}/entries`,"PUT",
-      {player_ids:chosen.map(p=>p.id),seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id)});
+    await api(`/competitions/${c.id}/entries`,"PUT",payload());
     flash("Teilnehmer gespeichert ("+chosen.length+"). Jetzt auslosen.");
   };
   const doDraw=async()=>{
-    await api(`/competitions/${c.id}/entries`,"PUT",
-      {player_ids:chosen.map(p=>p.id),seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id)});
+    await api(`/competitions/${c.id}/entries`,"PUT",payload());
     try{
       const r=await api(`/competitions/${c.id}/draw`,"POST");
       const conf=r.conflicts||[];
@@ -495,11 +504,13 @@ function Setup({c,players,onDone,flash}){
   };
   return <div className="card"><h3>Teilnehmer & Setzung</h3><div className="body">
     <div className="muted" style={{marginBottom:8,fontSize:13}}>Ankreuzen, wer mitspielt. „Gesetzt" hält Spieler bei der Auslosung getrennt.</div>
-    <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th><th>Gesetzt</th></tr></thead><tbody>
+    <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th><th>Gesetzt</th>{c.handicap_enabled && <th>Vorgabe</th>}</tr></thead><tbody>
       {players.map(p=><tr key={p.id}>
         <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>toggle(p.id)}/></td>
         <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
         <td>{sel[p.id] && <input type="checkbox" checked={!!seed[p.id]} onChange={()=>tSeed(p.id)}/>}</td>
+        {c.handicap_enabled && <td>{sel[p.id] && <input type="number" min="0" max="11" style={{width:60}}
+          value={hc[p.id]??0} onChange={e=>setHc(x=>({...x,[p.id]:Math.max(0,Math.min(11,+e.target.value||0))}))}/>}</td>}
       </tr>)}
     </tbody></table>
     {players.length===0 && <div className="muted">Lege zuerst unter „Spieler" welche an.</div>}
@@ -516,13 +527,14 @@ function SetupDoublesFixed({c,players,onDone,flash}){
   const used=new Set(pairs.flatMap(p=>[p.a,p.b]));
   const avail=players.filter(p=>!used.has(p.id));
   const nameOf=id=>{const p=players.find(x=>x.id===id);return p?p.name:id;};
-  const add=()=>{ if(!a||!b||a===b)return; setPairs([...pairs,{a:+a,b:+b,seeded:false}]); setA("");setB(""); };
+  const add=()=>{ if(!a||!b||a===b)return; setPairs([...pairs,{a:+a,b:+b,seeded:false,hc:0}]); setA("");setB(""); };
   const rm=i=>setPairs(pairs.filter((_,j)=>j!==i));
   const tSeed=i=>setPairs(pairs.map((p,j)=>j===i?{...p,seeded:!p.seeded}:p));
   const doDraw=async()=>{
     try{
       await api(`/competitions/${c.id}/pairs`,"PUT",
-        {pairs:pairs.map(p=>[p.a,p.b]), seeded:pairs.map((p,i)=>p.seeded?i:-1).filter(i=>i>=0)});
+        {pairs:pairs.map(p=>[p.a,p.b]), seeded:pairs.map((p,i)=>p.seeded?i:-1).filter(i=>i>=0),
+         handicaps:pairs.map(p=>+p.hc||0)});
       await api(`/competitions/${c.id}/draw`,"POST");
       flash("Ausgelost."); onDone();
     }catch(e){flash(e.message)}
@@ -538,6 +550,8 @@ function SetupDoublesFixed({c,players,onDone,flash}){
     {pairs.length===0 && <div className="muted">Noch keine Doppel gebildet.</div>}
     {pairs.map((p,i)=><div key={i} className="list-item">
       <b style={{flex:1}}>{nameOf(p.a)} / {nameOf(p.b)}</b>
+      {c.handicap_enabled && <label style={{fontSize:12}}>Vorgabe <input type="number" min="0" max="11" style={{width:60}}
+        value={p.hc??0} onChange={e=>setPairs(pairs.map((x,j)=>j===i?{...x,hc:Math.max(0,Math.min(11,+e.target.value||0))}:x))}/></label>}
       <label style={{fontSize:12}}><input type="checkbox" checked={p.seeded} onChange={()=>tSeed(i)}/> gesetzt</label>
       <button className="del" onClick={()=>rm(i)}>🗑</button></div>)}
     <div style={{marginTop:14}}>
@@ -551,7 +565,7 @@ function SetupDoublesFixed({c,players,onDone,flash}){
 function SetupDoublesDraw({c,players,onDone,flash}){
   const paired = c.entries.length>0 && c.entries.every(e=>(e.name||"").includes(" / "));
   const [sel,setSel]=useState({}); const [seed,setSeed]=useState({});
-  const [koSeed,setKoSeed]=useState({});
+  const [koSeed,setKoSeed]=useState({}); const [koHc,setKoHc]=useState({});
   useEffect(()=>{ if(paired){ const init={}; c.entries.forEach(e=>{if(e.seeded)init[e.id]=true;}); setKoSeed(init);} },[paired,c.id]);
   const chosen=players.filter(p=>sel[p.id]);
   const seededCount=chosen.filter(p=>seed[p.id]).length;
@@ -566,7 +580,8 @@ function SetupDoublesDraw({c,players,onDone,flash}){
   const doDraw=async()=>{
     try{
       await api(`/competitions/${c.id}/seeding`,"PUT",
-        {seeded_entry_ids:Object.keys(koSeed).filter(k=>koSeed[k]).map(Number)});
+        {seeded_entry_ids:Object.keys(koSeed).filter(k=>koSeed[k]).map(Number),
+         handicaps:Object.fromEntries((c.entries||[]).map(e=>[String(e.id), +koHc[e.id]||0]))});
       await api(`/competitions/${c.id}/draw`,"POST"); flash("Ausgelost."); onDone();
     }catch(e){flash(e.message)}
   };
@@ -586,9 +601,23 @@ function SetupDoublesDraw({c,players,onDone,flash}){
     <div className="muted" style={{marginBottom:8,fontSize:13}}>Partner sind ausgelost. Optional einzelne Doppel als „gesetzt" markieren (getrennte Baumhälften), dann auslosen.</div>
     {c.entries.map(e=><div key={e.id} className="list-item">
       <b style={{flex:1}}>{e.name}</b>
+      {c.handicap_enabled && <label style={{fontSize:12}}>Vorgabe <input type="number" min="0" max="11" style={{width:60}}
+        value={koHc[e.id]??e.handicap??0} onChange={ev=>setKoHc(x=>({...x,[e.id]:Math.max(0,Math.min(11,+ev.target.value||0))}))}/></label>}
       <label style={{fontSize:12}}><input type="checkbox" checked={!!koSeed[e.id]} onChange={()=>setKoSeed(s=>({...s,[e.id]:!s[e.id]}))}/> gesetzt</label></div>)}
     <div style={{marginTop:14}}><button className="btn" onClick={doDraw} disabled={c.entries.length<2}>KO auslosen ({c.entries.length} Doppel)</button></div>
   </div></div>;
+}
+
+// Vorgabe: höhere Vorgabe = schwächer -> erhält die Differenz je Satz als Vorsprung
+function Vorgabe({c,homeId,awayId,homeName,awayName}){
+  if(!c.handicap_enabled || !homeId || !awayId) return null;
+  const map={}; (c.entries||[]).forEach(e=>{map[e.id]=e.handicap||0;});
+  const h=map[homeId]||0, a=map[awayId]||0;
+  if(h===a) return <span className="pill" title="gleiche Vorgabe">Vorgabe 0</span>;
+  const d=Math.abs(h-a);
+  const who = h>a ? (homeName||"Heim") : (awayName||"Gast");
+  return <span className="pill" style={{background:"#fff7ed",color:"#9a3412",borderColor:"#fdba74"}}
+    title="Vorsprung je Satz">Vorgabe: {who} +{d} je Satz</span>;
 }
 
 const TARGET_POINTS = 11;  // feste Zielpunktzahl je Satz
@@ -674,6 +703,9 @@ function DoubleBracketView({de,c,edit,setEdit,saveResult,maxK}){
   const matchCell=(m)=><div className="bmatch" key={m.node}>
     <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span></div>
     <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span></div>
+    {!m.bye && m.home && m.away && c.handicap_enabled &&
+      <div className="bslot" style={{background:"#fff7ed"}}>
+        <Vorgabe c={c} homeId={m.home} awayId={m.away} homeName={m.home_name} awayName={m.away_name}/></div>}
     {m.bye
       ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>kampflos weiter</div>
       : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
@@ -770,7 +802,9 @@ function Play({c,onChange,flash}){
           <span className="muted" style={{width:34,fontFamily:"monospace"}}>R{m.round_no}</span>
           <div style={{flex:1,textAlign:"right"}}><span className={m.complete&&m.winner===m.home?"win":""}>{m.home_name}</span></div>
           <span className="muted">vs</span>
-          <div style={{flex:1}}><span className={m.complete&&m.winner===m.away?"win":""}>{m.away_name}</span></div>
+          <div style={{flex:1}}><span className={m.complete&&m.winner===m.away?"win":""}>{m.away_name}</span>
+            {c.handicap_enabled && <> <Vorgabe c={c} homeId={m.home} awayId={m.away} homeName={m.home_name} awayName={m.away_name}/></>}
+          </div>
           {(edit===m.id || !m.complete)
             ? <SetEntry sets={m.sets} maxSets={maxG} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(m.id,b)}/>
             : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
@@ -818,6 +852,8 @@ function Play({c,onChange,flash}){
               {m.bye
                 ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>Freilos</div>
                 : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
+                    {c.handicap_enabled && <div style={{marginBottom:4}}>
+                      <Vorgabe c={c} homeId={m.home} awayId={m.away} homeName={m.home_name} awayName={m.away_name}/></div>}
                     {(edit===m.id || !m.winner)
                       ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
                       : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
