@@ -186,29 +186,27 @@ function Comps({onOpen}){
       <label>Art</label>
       <div className="row" style={{marginBottom:10}}>
         <select value={f.competition_type} onChange={e=>{const t=e.target.value;
-          setF(prev=>({...prev,competition_type:t,mode:t==="double"?"ko":prev.mode}));}}>
+          setF(prev=>({...prev,competition_type:t,
+            mode: t==="double" ? (["ko","double_ko","super_melee"].includes(prev.mode)?prev.mode:"ko")
+                               : (prev.mode==="super_melee"?"group_ko":prev.mode)}));}}>
           <option value="single">Einzel</option><option value="double">Doppel</option>
         </select>
-        {f.competition_type==="double" && <select value={f.pairing} onChange={e=>setF({...f,pairing:e.target.value})}>
-          <option value="fixed">feste Paare melden</option><option value="draw">Partner auslosen</option>
-        </select>}
+        {f.competition_type==="double" && ["ko","double_ko"].includes(f.mode) &&
+          <select value={f.pairing} onChange={e=>setF({...f,pairing:e.target.value})}>
+            <option value="fixed">feste Paare melden</option><option value="draw">Partner auslosen</option>
+          </select>}
       </div>
-      {f.competition_type==="single" ? <>
-        <label>Modus</label>
-        <div className="modegrid" style={{marginBottom:12}}>
-          {modes.map(m=><div key={m.key}
+      <label>Spielform</label>
+      <div className="modegrid" style={{marginBottom:12}}>
+        {modes.filter(m=> f.competition_type==="double"
+              ? ["ko","double_ko","super_melee"].includes(m.key)
+              : m.key!=="super_melee")
+          .map(m=><div key={m.key}
             className={"modeopt"+(f.mode===m.key?" on":"")+(m.implemented?"":" off")}
             onClick={()=>m.implemented&&setF({...f,mode:m.key})}>
             <div className="lab">{m.label} {!m.implemented&&<span className="pill">geplant</span>}</div>
             <div className="hint">{m.hint}</div></div>)}
-        </div>
-      </> : <div className="row" style={{marginBottom:12}}>
-        <div><label>Modus (Doppel)</label>
-          <select value={f.mode} onChange={e=>setF({...f,mode:e.target.value})}>
-            <option value="ko">Einfach-KO</option><option value="double_ko">Doppel-KO</option>
-          </select></div>
-        <div className="muted" style={{fontSize:12,alignSelf:"center"}}>Doppel-KO: 4, 8, 16 oder 32 Doppel.</div>
-      </div>}
+      </div>
       <div className="row">
         {showGroups && <div><label>Gruppen</label><input type="number" style={{width:80}} value={f.group_count}
           onChange={e=>setF({...f,group_count:+e.target.value})}/></div>}
