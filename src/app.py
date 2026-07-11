@@ -10,6 +10,7 @@ from db import Database, D1DB
 from domain import ranking as R
 from domain import draw as D
 from domain import double_elim as DE
+from domain import super_melee as SM
 from domain.modes import MODES, mode_kind, effective_group_count, round_robin_schedule
 
 app = FastAPI(title="TT-Turnier")
@@ -98,7 +99,8 @@ def comp_dto(c: dict, entries=None):
          "group_count": effective_group_count(c["mode"], c["group_count"]),
          "advance_per_group": c["advance_per_group"], "ko_sets_to_win": c["ko_sets_to_win"],
          "status": c["status"], "score_mode": c["score_mode"],
-         "competition_type": c["competition_type"], "pairing": c["pairing"]}
+         "competition_type": c["competition_type"], "pairing": c["pairing"],
+         "round_count": c["round_count"]}
     if entries is not None:
         d["entries"] = [{"id": e["id"], "seeded": e["seeded"], "seed_no": e["seed_no"],
                          "group_no": e["group_no"], "bracket_slot": e["bracket_slot"],
@@ -182,6 +184,7 @@ class CompIn(BaseModel):
     score_mode: str = "points"
     competition_type: str = "single"     # single | double
     pairing: str | None = None           # bei double: fixed | draw
+    round_count: int = 0                  # Super-Mêlée: Anzahl Runden
 
 
 @app.get("/api/modes")
@@ -205,6 +208,12 @@ async def create_comp(body: CompIn, db=Depends(get_db)):
         raise HTTPException(400, "Ungültiger Wertungsmodus.")
     ctype = body.competition_type if body.competition_type in ("single", "double") else "single"
     pairing = None
+    round_count = 0
+    if body.mode == "super_melee":
+        ctype = "single"
+        round_count = int(body.round_count)
+        if round_count < 1:
+            raise HTTPException(400, "Bitte die Anzahl der Runden angeben (mindestens 1).")
     if ctype == "double":
         if body.mode not in ("ko", "double_ko"):
             raise HTTPException(400, "Doppel ist derzeit als Einfach-KO oder Doppel-KO verfügbar.")
@@ -212,10 +221,10 @@ async def create_comp(body: CompIn, db=Depends(get_db)):
         if pairing is None:
             raise HTTPException(400, "Bitte ein Paarbildungs-Verfahren wählen (feste Paare oder auslosen).")
     cid = await db.execute(
-        """INSERT INTO competitions (name,mode,sets_to_win,points_per_set,group_count,advance_per_group,ko_sets_to_win,status,score_mode,competition_type,pairing)
-           VALUES (?,?,?,?,?,?,?, 'setup', ?,?,?)""",
+        """INSERT INTO competitions (name,mode,sets_to_win,points_per_set,group_count,advance_per_group,ko_sets_to_win,status,score_mode,competition_type,pairing,round_count)
+           VALUES (?,?,?,?,?,?,?, 'setup', ?,?,?,?)""",
         (body.name, body.mode, body.sets_to_win, body.points_per_set,
-         body.group_count, body.advance_per_group, body.ko_sets_to_win, body.score_mode, ctype, pairing))
+         body.group_count, body.advance_per_group, body.ko_sets_to_win, body.score_mode, ctype, pairing, round_count))
     c = await get_comp(db, cid)
     return comp_dto(c, entries=[])
 
@@ -534,7 +543,7 @@ async def post_result(mid: int, body: ResultIn, db=Depends(get_db)):
 
     await db.execute("DELETE FROM match_sets WHERE match_id=?", (mid,))
     walkover = body.walkover if body.walkover in ("home", "away") else None
-    stw = c["sets_to_win"] if m["phase"] == "group" else c["ko_sets_to_win"]
+    stw = c["sets_to_win"] if m["phase"] in ("group", "melee") else c["ko_sets_to_win"]
     if not walkover and body.sets:
         if c["score_mode"] == "sets":
             # Genau ein Satzergebnis erwartet: [Sätze_Heim, Sätze_Gast]
@@ -669,6 +678,134 @@ async def double_bracket(cid: int, db=Depends(get_db)):
             "runner_up": st["runner_up"], "runner_up_name": names.get(st["runner_up"]),
             "third": st["third"], "third_name": names.get(st["third"]),
             "matches": out}
+
+
+# ---- Super-Mêlée --------------------------------------------------------------
+async def _melee_participants(db, cid):
+    rows = await db.query(
+        """SELECT e.id eid, e.bracket_slot, COUNT(m.id) cnt, MIN(m.player_id) pid
+           FROM entries e LEFT JOIN entry_members m ON m.entry_id=e.id
+           WHERE e.competition_id=? GROUP BY e.id ORDER BY e.id""", (cid,))
+    return [r for r in rows if r["cnt"] == 1]
+
+
+async def _team_entry(db, cid, players, rnd):
+    eid = await db.execute("INSERT INTO entries (competition_id,group_no) VALUES (?,?)", (cid, rnd))
+    for oi, pid in enumerate(players):
+        await db.execute("INSERT INTO entry_members (entry_id,player_id,order_index) VALUES (?,?,?)", (eid, pid, oi))
+    return eid
+
+
+@app.post("/api/competitions/{cid}/melee/draw")
+async def melee_draw(cid: int, seed: int | None = None, db=Depends(get_db)):
+    c = await get_comp(db, cid)
+    if mode_kind(c["mode"]) != "super_melee":
+        raise HTTPException(400, "Nur für Super-Mêlée verfügbar.")
+    parts = await _melee_participants(db, cid)
+    n = len(parts)
+    if n < 4 or n % 2 != 0:
+        raise HTTPException(400, "Super-Mêlée benötigt eine gerade Teilnehmerzahl von mindestens 4.")
+    if c["round_count"] > SM.max_rounds(n):
+        raise HTTPException(400,
+            f"Mit {n} Teilnehmern sind höchstens {SM.max_rounds(n)} Runden ohne Partner-Wiederholung möglich "
+            f"(eingestellt: {c['round_count']}). Bitte Teilnehmerzahl erhöhen oder weniger Runden wählen.")
+    ms = await load_matches(db, cid)
+    melee = [m for m in ms if m["phase"] == "melee"]
+    played = max([m["round_no"] for m in melee], default=0)
+    nxt = played + 1
+    if nxt > c["round_count"]:
+        raise HTTPException(400, "Alle geplanten Runden sind bereits ausgelost.")
+    if played >= 1:
+        last = [m for m in melee if m["round_no"] == played and m["status"] != "bye"]
+        for m in last:
+            o = outcome(c["score_mode"], m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
+                        c["sets_to_win"], c["points_per_set"])
+            if not o["complete"]:
+                raise HTTPException(400, "Bitte zuerst alle Ergebnisse der aktuellen Runde eintragen.")
+
+    rng = random.Random((seed if seed is not None else random.randrange(1_000_000)))
+    if nxt == 1:
+        perm = list(range(n))
+        rng.shuffle(perm)
+        for idx, p in zip(perm, parts):
+            await db.execute("UPDATE entries SET bracket_slot=? WHERE id=?", (idx, p["eid"]))
+        parts = await _melee_participants(db, cid)
+
+    slot_to_player = {p["bracket_slot"]: p["pid"] for p in parts}
+    player_ids = [slot_to_player[i] for i in range(n)]
+    pair_idx = SM.partner_rounds(n)[nxt - 1]
+    games, bye = SM.draw_round(pair_idx, player_ids, random.Random((seed or 0) * 100 + nxt))
+    for team_a, team_b in games:
+        ea = await _team_entry(db, cid, team_a, nxt)
+        eb = await _team_entry(db, cid, team_b, nxt)
+        await db.execute(
+            """INSERT INTO matches (competition_id,phase,round_no,home_entry_id,away_entry_id,status)
+               VALUES (?,?,?,?,?, 'pending')""", (cid, "melee", nxt, ea, eb))
+    if bye:
+        eby = await _team_entry(db, cid, bye, nxt)
+        await db.execute(
+            """INSERT INTO matches (competition_id,phase,round_no,home_entry_id,away_entry_id,status)
+               VALUES (?,?,?,?, NULL, 'bye')""", (cid, "melee", nxt, eby))
+    await db.execute("UPDATE competitions SET status='running' WHERE id=?", (cid,))
+    return {"ok": True, "round": nxt}
+
+
+@app.get("/api/competitions/{cid}/melee")
+async def melee_state(cid: int, db=Depends(get_db)):
+    c = await get_comp(db, cid)
+    if mode_kind(c["mode"]) != "super_melee":
+        raise HTTPException(400, "Nur für Super-Mêlée verfügbar.")
+    parts = await _melee_participants(db, cid)
+    part_players = [p["pid"] for p in parts]
+    prows = await db.query(
+        "SELECT id, (first_name || ' ' || last_name) AS name FROM players", ())
+    names = {r["id"]: r["name"] for r in prows}
+    mem = await db.query(
+        """SELECT em.entry_id, em.player_id FROM entry_members em
+           JOIN entries e ON e.id=em.entry_id WHERE e.competition_id=? ORDER BY em.order_index""", (cid,))
+    members = {}
+    for r in mem:
+        members.setdefault(r["entry_id"], []).append(r["player_id"])
+
+    ms = await load_matches(db, cid)
+    melee = [m for m in ms if m["phase"] == "melee"]
+    results, rounds = [], {}
+    for m in melee:
+        r = m["round_no"]
+        rounds.setdefault(r, {"round": r, "games": [], "bye": None})
+        home = members.get(m["home_entry_id"], [])
+        if m["status"] == "bye" or m["away_entry_id"] is None:
+            rounds[r]["bye"] = {"players": home, "name": " / ".join(names.get(p, "?") for p in home)}
+            results.append({"players": home, "points": {p: 1 for p in home}, "diff": {p: 0 for p in home}})
+            continue
+        away = members.get(m["away_entry_id"], [])
+        o = outcome(c["score_mode"], m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
+                    c["sets_to_win"], c["points_per_set"])
+        g = {"id": m["id"], "home": home, "away": away,
+             "home_name": " / ".join(names.get(p, "?") for p in home),
+             "away_name": " / ".join(names.get(p, "?") for p in away),
+             "sets": [[s["home_points"], s["away_points"]] for s in m["sets"]],
+             "walkover": m["walkover"], "winner": None, "complete": o["complete"]}
+        if o["complete"]:
+            home_won = o["winner"] == m["home_entry_id"]
+            g["winner"] = "home" if home_won else "away"
+            diff_h = (o["hs"] - o["as"]) if c["score_mode"] == "sets" else (o["hp"] - o["ap"])
+            pts = {**{p: (2 if home_won else 0) for p in home}, **{p: (0 if home_won else 2) for p in away}}
+            diff = {**{p: diff_h for p in home}, **{p: -diff_h for p in away}}
+            results.append({"players": home + away, "points": pts, "diff": diff})
+        rounds[r]["games"].append(g)
+
+    standings = SM.standings(part_players, results)
+    for row in standings:
+        row["name"] = names.get(row["player"], "?")
+    played = max(rounds) if rounds else 0
+    last_done = True
+    if played >= 1:
+        last_done = all(g["complete"] for g in rounds[played]["games"])
+    can_draw = played < c["round_count"] and (played == 0 or last_done)
+    return {"round_count": c["round_count"], "played": played, "n": len(parts),
+            "rounds": [rounds[r] for r in sorted(rounds)],
+            "standings": standings, "can_draw": can_draw, "score_mode": c["score_mode"]}
 
 
 # ---- Gruppe -> KO -------------------------------------------------------------
