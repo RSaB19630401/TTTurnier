@@ -4,7 +4,7 @@ Turniermodi als Registry (Strategy-Pattern, wie im Architekturentwurf).
 Phase 1 aktiv über eine gemeinsame Round-Robin-Engine bzw. KO-Engine:
   round_system, poule, group, ko, group_ko
 Geplant (Interface vorhanden, noch nicht aktiv):
-  swiss, double_ko, full_ko, melee, super_melee
+  swiss, double_ko, full_ko, super_melee
 """
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ MODES: dict[str, dict] = {
     "round_system": {"label": "Rundensystem", "kind": "group", "implemented": True,
                      "fixed_groups": 1,
                      "hint": "Jeder gegen jeden in einer Runde."},
-    "poule":        {"label": "Poule", "kind": "group", "implemented": True,
-                     "hint": "Round-Robin-Pool(s); Gruppenzahl konfigurierbar."},
     "group":        {"label": "Gruppensystem", "kind": "group", "implemented": True,
                      "hint": "Mehrere Gruppen, Rangliste je Gruppe."},
     "ko":           {"label": "KO-System", "kind": "ko", "implemented": True,
