@@ -12,6 +12,7 @@ from domain import draw as D
 from domain import double_elim as DE
 from domain import super_melee as SM
 from domain import swiss as SW
+from domain import full_ko as FK
 from domain.modes import MODES, mode_kind, effective_group_count, round_robin_schedule
 
 app = FastAPI(title="TT-Turnier")
@@ -224,9 +225,16 @@ async def create_comp(body: CompIn, db=Depends(get_db)):
         if round_count < 1:
             raise HTTPException(400, "Bitte die Anzahl der Runden angeben (mindestens 1).")
         pairing = body.pairing if body.pairing in ("random", "seeded") else "random"
+    elif body.mode == "full_ko":
+        # round_count trägt hier die Platz-Obergrenze (0 = alle Plätze ausspielen)
+        round_count = int(body.round_count) if body.round_count and body.round_count >= 2 else 0
+        if ctype == "double":
+            pairing = body.pairing if body.pairing in ("fixed", "draw") else None
+            if pairing is None:
+                raise HTTPException(400, "Bitte ein Paarbildungs-Verfahren wählen (feste Paare oder auslosen).")
     elif ctype == "double":
-        if body.mode not in ("ko", "double_ko"):
-            raise HTTPException(400, "Doppel ist als Einfach-KO, Doppel-KO oder Super-Mêlée verfügbar.")
+        if body.mode not in ("ko", "double_ko", "full_ko"):
+            raise HTTPException(400, "Doppel ist als Einfach-KO, Doppel-KO, Vollständiges KO oder Super-Mêlée verfügbar.")
         pairing = body.pairing if body.pairing in ("fixed", "draw") else None
         if pairing is None:
             raise HTTPException(400, "Bitte ein Paarbildungs-Verfahren wählen (feste Paare oder auslosen).")
@@ -417,6 +425,28 @@ async def draw(cid: int, seed: int | None = None, db=Depends(get_db)):
             if eid is not None:
                 await db.execute("UPDATE entries SET bracket_slot=? WHERE id=?", (pos, eid))
         await _insert_ko_skeleton(db, cid, slots)
+    elif kind == "full_ko":
+        n = len(entries)
+        if n < 3 or n > 64:
+            raise HTTPException(400, "Vollständiges KO ist für 3 bis 64 Teilnehmer möglich.")
+        slots, _ = D.draw_ko(_draw_entries(entries, True), rng)   # kein Vereinsschutz
+        for pos, eid in enumerate(slots):
+            if eid is not None:
+                await db.execute("UPDATE entries SET bracket_slot=? WHERE id=?", (pos, eid))
+        S = len(slots)
+        places_to = c["round_count"] if c["round_count"] and c["round_count"] >= 2 else n
+        places_to = min(places_to, n)
+        nodes, places, meta = FK.build(S, places_to)
+        for nid in nodes:
+            _, start, size, idx = nid.split(":")
+            home = away = None
+            if nodes[nid]["home"][0] == "slot":
+                home = slots[nodes[nid]["home"][1]]
+                away = slots[nodes[nid]["away"][1]]
+            await db.execute(
+                """INSERT INTO matches (competition_id,phase,round_no,group_no,bracket_round,bracket_index,home_entry_id,away_entry_id)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (cid, "fko", 0, int(start), int(size), int(idx), home, away))
     elif kind == "double_ko":
         n = len(entries)
         if n < 4 or n > 64:
@@ -533,6 +563,17 @@ async def post_result(mid: int, body: ResultIn, db=Depends(get_db)):
     if m["phase"] == "ko" and (m["home_entry_id"] is None or m["away_entry_id"] is None):
         st = await _ko_state(db, c)
         h, a = st["occ"].get((m["bracket_round"], m["bracket_index"]), (None, None))
+        if h is None or a is None:
+            raise HTTPException(400, "Beide Teilnehmer stehen noch nicht fest.")
+        await db.execute("UPDATE matches SET home_entry_id=?, away_entry_id=? WHERE id=?", (h, a, mid))
+        m["home_entry_id"], m["away_entry_id"] = h, a
+
+    if m["phase"] == "fko":
+        st = await _fko_state(db, c)
+        nid = f'pk:{m["group_no"]}:{m["bracket_round"]}:{m["bracket_index"]}'
+        h, a = st["occ"].get(nid, (None, None))
+        if h == FK.BYE or a == FK.BYE:
+            raise HTTPException(400, "Freilos – hier wird kein Ergebnis erfasst.")
         if h is None or a is None:
             raise HTTPException(400, "Beide Teilnehmer stehen noch nicht fest.")
         await db.execute("UPDATE matches SET home_entry_id=?, away_entry_id=? WHERE id=?", (h, a, mid))
@@ -816,6 +857,73 @@ async def melee_state(cid: int, db=Depends(get_db)):
     return {"round_count": c["round_count"], "played": played, "n": len(parts),
             "rounds": [rounds[r] for r in sorted(rounds)],
             "standings": standings, "can_draw": can_draw, "score_mode": c["score_mode"]}
+
+
+async def _fko_state(db, c):
+    """Live-Auswertung des vollständigen KO."""
+    cid = c["id"]
+    entries = await load_entries(db, cid)
+    n = len(entries)
+    if n < 3:
+        return None
+    ms = await load_matches(db, cid)
+    fk = [m for m in ms if m["phase"] == "fko"]
+    if not fk:
+        return None
+    by = {f'pk:{m["group_no"]}:{m["bracket_round"]}:{m["bracket_index"]}': m for m in fk}
+    S = D.next_pow2(n)
+    places_to = c["round_count"] if c["round_count"] and c["round_count"] >= 2 else n
+    places_to = min(places_to, n)
+    nodes, places, meta = FK.build(S, places_to)
+
+    slot_of = {e["bracket_slot"]: e["id"] for e in entries if e["bracket_slot"] is not None}
+    seeding = [slot_of.get(i, FK.BYE) for i in range(S)]
+
+    decided = {}
+    for nid, row in by.items():
+        h, a = row["home_entry_id"], row["away_entry_id"]
+        if h is None or a is None:
+            continue
+        o = outcome(c["score_mode"], row["walkover"], row["sets"], h, a,
+                    c["ko_sets_to_win"], c["points_per_set"])
+        if o["complete"]:
+            decided[nid] = o["winner"]
+    st = FK.evaluate(nodes, places, seeding, decided)
+    st.update({"nodes": nodes, "by": by, "meta": meta, "entries": entries})
+    return st
+
+
+@app.get("/api/competitions/{cid}/full_bracket")
+async def full_bracket(cid: int, db=Depends(get_db)):
+    c = await get_comp(db, cid)
+    if mode_kind(c["mode"]) != "full_ko":
+        raise HTTPException(400, "Nur für Vollständiges KO verfügbar.")
+    st = await _fko_state(db, c)
+    if not st:
+        return {"ready": False, "matches": [], "places": []}
+    names = {e["id"]: e["name"] for e in st["entries"]}
+    out = []
+    for nid, nd in st["nodes"].items():
+        _, start, size, idx = nid.split(":")
+        row = st["by"].get(nid)
+        h, a = st["occ"].get(nid, (None, None))
+        w = st["winner"].get(nid)
+        bye = (h == FK.BYE) or (a == FK.BYE)
+        hh = None if (h is None or h == FK.BYE) else h
+        aa = None if (a is None or a == FK.BYE) else a
+        ww = None if (w is None or w == FK.BYE) else w
+        size_i = int(size); start_i = int(start)
+        out.append({"node": nid, "id": row["id"] if row else None,
+                    "start": start_i, "size": size_i, "index": int(idx),
+                    "label": f"Plätze {start_i}–{start_i + size_i - 1}",
+                    "home": hh, "away": aa, "home_name": names.get(hh), "away_name": names.get(aa),
+                    "winner": ww, "bye": bye,
+                    "sets": [[s["home_points"], s["away_points"]] for s in (row["sets"] if row else [])],
+                    "walkover": row["walkover"] if row else None})
+    places = [{"place": p, "entry": e, "name": names.get(e)}
+              for p, e in sorted(st["places"].items())]
+    return {"ready": True, "places_to": st["meta"]["places_to"],
+            "places": places, "matches": out}
 
 
 # ---- Schweizer System ---------------------------------------------------------
