@@ -212,6 +212,14 @@ function Comps({onOpen}){
           onChange={e=>setF({...f,group_count:+e.target.value})}/></div>}
         {kind==="group_ko" && <div><label>Aufsteiger/Gr.</label><input type="number" style={{width:90}} value={f.advance_per_group}
           onChange={e=>setF({...f,advance_per_group:+e.target.value})}/></div>}
+        {kind==="swiss" && <>
+          <div><label>Runden</label><input type="number" style={{width:80}} value={f.round_count}
+            onChange={e=>setF({...f,round_count:+e.target.value})}/></div>
+          <div><label>Runde 1</label>
+            <select value={f.pairing==="seeded"?"seeded":"random"} onChange={e=>setF({...f,pairing:e.target.value})}>
+              <option value="random">zufällig auslosen</option><option value="seeded">nach Setzung</option>
+            </select></div>
+        </>}
         {kind==="super_melee" && <div><label>Runden</label><input type="number" style={{width:80}} value={f.round_count}
           onChange={e=>setF({...f,round_count:+e.target.value})}/></div>}
         <div><label>Sätze b. Sieg</label><input type="number" style={{width:90}} value={f.sets_to_win}
@@ -233,6 +241,84 @@ function Comps({onOpen}){
         <button className="del" title="Wettbewerb löschen" onClick={e=>del(c,e)}>🗑</button>
         <span className="muted">›</span></div>)}
     </div></div>
+  </>;
+}
+
+// -------------------------------------------------------- Schweizer System: Setup
+function SwissSetup({c,players,onDone,flash}){
+  const [sel,setSel]=useState({}); const [seed,setSeed]=useState({});
+  const chosen=players.filter(p=>sel[p.id]);
+  const n=chosen.length;
+  const maxR = n<3?0:Math.max(1, n%2===0 ? n-3 : n-2);
+  const ok = n>=3 && c.round_count<=maxR;
+  const start=async()=>{
+    try{
+      await api(`/competitions/${c.id}/entries`,"PUT",
+        {player_ids:chosen.map(p=>p.id),seeded_ids:chosen.filter(p=>seed[p.id]).map(p=>p.id)});
+      await api(`/competitions/${c.id}/swiss/draw`,"POST"); flash("Runde 1 ausgelost."); onDone();
+    }catch(e){flash(e.message)}
+  };
+  return <div className="card"><h3>Teilnehmer wählen (Schweizer System)</h3><div className="body">
+    <div className="muted" style={{marginBottom:8,fontSize:13}}>
+      {c.round_count} Runden eingestellt. {c.pairing==="seeded"
+        ? "Runde 1 wird nach Setzung gepaart – kreuze die gesetzten Spieler an (stärkere Hälfte)."
+        : "Runde 1 wird zufällig ausgelost."}
+    </div>
+    <table><thead><tr><th>Mit</th><th>Name</th><th>Verein</th>{c.pairing==="seeded" && <th>Gesetzt</th>}</tr></thead><tbody>
+      {players.map(p=><tr key={p.id}>
+        <td><input type="checkbox" checked={!!sel[p.id]} onChange={()=>setSel(s=>({...s,[p.id]:!s[p.id]}))}/></td>
+        <td><b>{p.name}</b></td><td className="muted">{p.club||"—"}</td>
+        {c.pairing==="seeded" && <td>{sel[p.id] && <input type="checkbox" checked={!!seed[p.id]}
+          onChange={()=>setSeed(s=>({...s,[p.id]:!s[p.id]}))}/>}</td>}
+      </tr>)}
+    </tbody></table>
+    <div className="muted" style={{fontSize:12,marginTop:6}}>
+      {n} Teilnehmer{n>=3 && c.round_count>maxR?` – ${c.round_count} Runden sind zu viele (max. ${maxR})`:""}
+    </div>
+    <div style={{marginTop:14}}><button className="btn" onClick={start} disabled={!ok}>Runde 1 auslosen</button></div>
+  </div></div>;
+}
+
+// ------------------------------------------------------ Schweizer System: Spielen
+function SwissPlay({c,flash}){
+  const [st,setSt]=useState(null); const [edit,setEdit]=useState(null);
+  const load=()=>api(`/competitions/${c.id}/swiss`).then(setSt);
+  useEffect(()=>{load()},[c.id]);
+  const maxG=c.sets_to_win*2-1;
+  const saveResult=async(mid,body)=>{ try{ await api(`/matches/${mid}/result`,"POST",body); setEdit(null); await load(); }catch(e){flash(e.message)} };
+  const nextRound=async()=>{ try{ await api(`/competitions/${c.id}/swiss/draw`,"POST"); flash("Nächste Runde ausgelost."); await load(); }catch(e){flash(e.message)} };
+  if(!st) return <div className="muted">lädt…</div>;
+  return <>
+    <div className="card"><h3>Rangliste</h3><div className="body">
+      <table><thead><tr><th>#</th><th>Name</th><th>Punkte</th><th>Buchholz</th><th>Spiele</th><th>Freilose</th></tr></thead>
+        <tbody>{st.standings.map(r=><tr key={r.player}>
+          <td><span className="badge" style={{background:r.rank<=3?"#059669":"#94a3b8"}}>{r.rank}</span></td>
+          <td><b>{r.name}</b></td>
+          <td style={{fontWeight:800,color:"var(--blue)"}}>{r.points}</td>
+          <td>{r.buchholz}</td><td className="muted">{r.games}</td><td className="muted">{r.byes||"—"}</td></tr>)}
+        </tbody></table>
+      <div className="muted" style={{fontSize:11,marginTop:6}}>Sieg 1 · Freilos 1 · Niederlage 0 · Feinwertung: Buchholz (Summe der Gegnerpunkte)</div>
+    </div></div>
+
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+      <span className="muted">Runde {st.played} von {st.round_count}</span>
+      {st.can_draw && <button className="btn" onClick={nextRound}>Nächste Runde auslosen</button>}
+      {!st.can_draw && st.played>=st.round_count && <span className="pill">alle Runden gespielt</span>}
+    </div>
+
+    {[...st.rounds].reverse().map(rd=><div key={rd.round} className="card"><h3>Runde {rd.round}</h3><div className="body">
+      {rd.games.map(g=><div key={g.id} className="list-item" style={{alignItems:"center"}}>
+        <div style={{flex:1}}>
+          <span className={g.winner===g.home?"win":""}>{g.home_name}</span>
+          <span className="muted"> vs </span>
+          <span className={g.winner===g.away?"win":""}>{g.away_name}</span>
+        </div>
+        {(edit===g.id || !g.complete)
+          ? <SetEntry sets={g.sets} maxSets={maxG} walkover={g.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(g.id,b)}/>
+          : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(g.id)}>{g.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
+      </div>)}
+      {rd.bye && <div className="list-item"><span style={{flex:1}}><b>{rd.bye.name}</b></span><span className="pill">Freilos · 1 Punkt</span></div>}
+    </div></div>)}
   </>;
 }
 
@@ -321,7 +407,11 @@ function CompDetail({id,onBack}){
       <b style={{fontSize:17}}>{c.name}</b><span className="pill">{c.mode_label}</span><span className="pill">{c.status}</span>
     </div>
     {msg && <div className="flash">{msg}</div>}
-    {c.kind==="super_melee"
+    {c.kind==="swiss"
+      ? (c.status==="setup"
+          ? <SwissSetup c={c} players={players} onDone={()=>reload()} flash={flash}/>
+          : <SwissPlay c={c} flash={flash}/>)
+      : c.kind==="super_melee"
       ? (c.status==="setup"
           ? <MeleeSetup c={c} players={players} onDone={()=>reload()} flash={flash}/>
           : <MeleePlay c={c} flash={flash}/>)
