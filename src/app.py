@@ -2,8 +2,12 @@
 from __future__ import annotations
 from math import log2
 import random
+import hmac
+import hashlib
+import time
 
 from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from db import Database, D1DB
@@ -24,6 +28,100 @@ async def get_db(request: Request) -> Database:
     if env is None:
         raise HTTPException(500, "Keine Umgebung/DB-Binding verfügbar.")
     return D1DB(env.DB)
+
+
+# ----------------------------------------------------------------- Anmeldung ---
+# Benutzername und Passwort liegen NICHT im Code, sondern als Cloudflare-Secrets
+# (APP_USER / APP_PASSWORD). Fehlen sie, ist die App gesperrt.
+AUTH_COOKIE = "ttsession"
+SESSION_HOURS = 12
+
+
+def _env_val(env, name, default=None):
+    try:
+        v = getattr(env, name)
+    except AttributeError:
+        return default
+    return default if v is None else str(v)
+
+
+def _sign(secret: str, payload: str) -> str:
+    return hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def _make_token(secret: str) -> str:
+    exp = str(int(time.time()) + SESSION_HOURS * 3600)
+    return f"{exp}.{_sign(secret, exp)}"
+
+
+def _token_valid(secret: str, token: str) -> bool:
+    if not token or "." not in token:
+        return False
+    exp, sig = token.rsplit(".", 1)
+    if not hmac.compare_digest(_sign(secret, exp), sig):
+        return False
+    try:
+        return int(exp) > time.time()
+    except ValueError:
+        return False
+
+
+OPEN_PATHS = ("/api/login", "/api/session")
+
+
+@app.middleware("http")
+async def auth_guard(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/") or path in OPEN_PATHS:
+        return await call_next(request)
+    env = request.scope.get("env")
+    if env is None:
+        return await call_next(request)   # nur lokale Tests: keine Worker-Umgebung vorhanden
+    secret = _env_val(env, "APP_PASSWORD")
+    if not secret:
+        # Im Worker MUSS das Secret gesetzt sein – sonst bleibt die App gesperrt.
+        return JSONResponse({"detail": "Anmeldung nicht konfiguriert (APP_PASSWORD fehlt)."}, status_code=503)
+    if not _token_valid(secret, request.cookies.get(AUTH_COOKIE, "")):
+        return JSONResponse({"detail": "Nicht angemeldet."}, status_code=401)
+    return await call_next(request)
+
+
+class LoginIn(BaseModel):
+    user: str = ""
+    password: str = ""
+
+
+@app.get("/api/session")
+async def session_state(request: Request):
+    env = request.scope.get("env")
+    secret = _env_val(env, "APP_PASSWORD")
+    if not secret:
+        return {"configured": False, "authenticated": False}
+    return {"configured": True,
+            "authenticated": _token_valid(secret, request.cookies.get(AUTH_COOKIE, ""))}
+
+
+@app.post("/api/login")
+async def login(request: Request, body: LoginIn):
+    env = request.scope.get("env")
+    secret = _env_val(env, "APP_PASSWORD")
+    user = _env_val(env, "APP_USER", "TTTurnier")
+    if not secret:
+        raise HTTPException(503, "Anmeldung nicht konfiguriert (APP_PASSWORD fehlt).")
+    ok = hmac.compare_digest(body.user.strip(), user) and hmac.compare_digest(body.password, secret)
+    if not ok:
+        raise HTTPException(401, "Benutzername oder Passwort falsch.")
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(AUTH_COOKIE, _make_token(secret), max_age=SESSION_HOURS * 3600,
+                    httponly=True, secure=True, samesite="lax", path="/")
+    return resp
+
+
+@app.post("/api/logout")
+async def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(AUTH_COOKIE, path="/")
+    return resp
 
 
 # ------------------------------------------------------------- Hilfsfunktionen -
