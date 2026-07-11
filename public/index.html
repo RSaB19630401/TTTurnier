@@ -187,11 +187,11 @@ function Comps({onOpen}){
       <div className="row" style={{marginBottom:10}}>
         <select value={f.competition_type} onChange={e=>{const t=e.target.value;
           setF(prev=>({...prev,competition_type:t,
-            mode: t==="double" ? (["ko","double_ko","super_melee"].includes(prev.mode)?prev.mode:"ko")
+            mode: t==="double" ? (["ko","double_ko","full_ko","super_melee"].includes(prev.mode)?prev.mode:"ko")
                                : (prev.mode==="super_melee"?"group_ko":prev.mode)}));}}>
           <option value="single">Einzel</option><option value="double">Doppel</option>
         </select>
-        {f.competition_type==="double" && ["ko","double_ko"].includes(f.mode) &&
+        {f.competition_type==="double" && ["ko","double_ko","full_ko"].includes(f.mode) &&
           <select value={f.pairing} onChange={e=>setF({...f,pairing:e.target.value})}>
             <option value="fixed">feste Paare melden</option><option value="draw">Partner auslosen</option>
           </select>}
@@ -199,11 +199,12 @@ function Comps({onOpen}){
       <label>Spielform</label>
       <div className="modegrid" style={{marginBottom:12}}>
         {modes.filter(m=> f.competition_type==="double"
-              ? ["ko","double_ko","super_melee"].includes(m.key)
+              ? ["ko","double_ko","full_ko","super_melee"].includes(m.key)
               : m.key!=="super_melee")
           .map(m=><div key={m.key}
             className={"modeopt"+(f.mode===m.key?" on":"")+(m.implemented?"":" off")}
-            onClick={()=>m.implemented&&setF({...f,mode:m.key})}>
+            onClick={()=>m.implemented&&setF({...f,mode:m.key,
+              round_count: m.key==="full_ko" ? 0 : (["swiss","super_melee"].includes(m.key) ? (f.round_count||5) : f.round_count)})}>
             <div className="lab">{m.label} {!m.implemented&&<span className="pill">geplant</span>}</div>
             <div className="hint">{m.hint}</div></div>)}
       </div>
@@ -220,6 +221,8 @@ function Comps({onOpen}){
               <option value="random">zufällig auslosen</option><option value="seeded">nach Setzung</option>
             </select></div>
         </>}
+        {kind==="full_ko" && <div><label>Plätze bis</label><input type="number" style={{width:90}} value={f.round_count}
+          placeholder="alle" onChange={e=>setF({...f,round_count:+e.target.value})}/></div>}
         {kind==="super_melee" && <div><label>Runden</label><input type="number" style={{width:80}} value={f.round_count}
           onChange={e=>setF({...f,round_count:+e.target.value})}/></div>}
         <div><label>Sätze b. Sieg</label><input type="number" style={{width:90}} value={f.sets_to_win}
@@ -241,6 +244,49 @@ function Comps({onOpen}){
         <button className="del" title="Wettbewerb löschen" onClick={e=>del(c,e)}>🗑</button>
         <span className="muted">›</span></div>)}
     </div></div>
+  </>;
+}
+
+// ------------------------------------------------------- Vollständiges KO: Ansicht
+function FullBracketView({c,flash}){
+  const [br,setBr]=useState(null); const [edit,setEdit]=useState(null);
+  const load=()=>api(`/competitions/${c.id}/full_bracket`).then(setBr);
+  useEffect(()=>{load()},[c.id]);
+  const maxK=c.ko_sets_to_win*2-1;
+  const saveResult=async(mid,body)=>{ try{ await api(`/matches/${mid}/result`,"POST",body); setEdit(null); await load(); }catch(e){flash(e.message)} };
+  if(!br) return <div className="muted">lädt…</div>;
+  if(!br.ready) return <div className="muted">Noch nicht ausgelost.</div>;
+  // Gruppen nach Platzbereich, größte zuerst (Runde für Runde)
+  const groups={};
+  br.matches.forEach(m=>{ const k=`${m.start}|${m.size}`; (groups[k]=groups[k]||{start:m.start,size:m.size,label:m.label,list:[]}).list.push(m); });
+  const ordered=Object.values(groups).sort((a,b)=> b.size-a.size || a.start-b.start);
+  return <>
+    {br.places.length>0 && <div className="card"><h3>Platzierungen</h3><div className="body">
+      <table><thead><tr><th>Platz</th><th>Name</th></tr></thead><tbody>
+        {br.places.map(p=><tr key={p.place}>
+          <td><span className="badge" style={{background:p.place<=3?"#059669":"#94a3b8"}}>{p.place}</span></td>
+          <td><b>{p.name}</b></td></tr>)}
+      </tbody></table>
+      <div className="muted" style={{fontSize:11,marginTop:6}}>
+        {br.places_to<c.entries.length?`Es werden die Plätze 1–${br.places_to} ausgespielt.`:"Alle Plätze werden ausgespielt."}
+      </div>
+    </div></div>}
+    {ordered.map(g=><div key={g.start+"|"+g.size} className="card"><h3>{g.label}</h3><div className="body">
+      {g.list.sort((a,b)=>a.index-b.index).map(m=><div key={m.node} className="list-item" style={{alignItems:"center"}}>
+        <div style={{flex:1}}>
+          <span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
+          <span className="muted"> vs </span>
+          <span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
+        </div>
+        {m.bye
+          ? <span className="pill">Freilos · kampflos weiter</span>
+          : (m.home&&m.away
+              ? ((edit===m.id || !m.winner)
+                  ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
+                  : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>{m.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>)
+              : <span className="muted" style={{fontSize:12}}>wartet</span>)}
+      </div>)}
+    </div></div>)}
   </>;
 }
 
@@ -407,7 +453,9 @@ function CompDetail({id,onBack}){
       <b style={{fontSize:17}}>{c.name}</b><span className="pill">{c.mode_label}</span><span className="pill">{c.status}</span>
     </div>
     {msg && <div className="flash">{msg}</div>}
-    {c.kind==="swiss"
+    {c.kind==="full_ko" && c.status!=="setup"
+      ? <FullBracketView c={c} flash={flash}/>
+      : c.kind==="swiss"
       ? (c.status==="setup"
           ? <SwissSetup c={c} players={players} onDone={()=>reload()} flash={flash}/>
           : <SwissPlay c={c} flash={flash}/>)
