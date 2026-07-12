@@ -1146,6 +1146,206 @@ async def swiss_state(cid: int, db=Depends(get_db)):
             "can_draw": played < c["round_count"] and last_done}
 
 
+# ---- Archiv / Import / Massen-Löschung ----------------------------------------
+def _sets_text(sets, walkover):
+    if walkover in ("home", "away"):
+        return "kampflos"
+    return " ".join(f"{s[0]}:{s[1]}" for s in sets) if sets else ""
+
+
+@app.get("/api/competitions/{cid}/archive")
+async def archive(cid: int, db=Depends(get_db)):
+    """Ergebnisliste + Abschlusstabelle eines Wettbewerbs (für den Excel-Export)."""
+    c = await get_comp(db, cid)
+    kind = mode_kind(c["mode"])
+    entries = await load_entries(db, cid)
+    names = {e["id"]: e["name"] for e in entries}
+    info = {"name": c["name"], "modus": (MODES.get(c["mode"]) or {}).get("label", c["mode"]),
+            "art": "Doppel" if c["competition_type"] == "double" else "Einzel",
+            "wertung": "nur Sätze" if c["score_mode"] == "sets" else "Ballpunkte",
+            "vorgabe": "ja" if c["handicap_enabled"] else "nein",
+            "teilnehmer": len(entries), "status": c["status"]}
+    games, table = [], []
+
+    if kind in ("group", "group_ko"):
+        rk = await ranking(cid, db)
+        for g in rk["groups"]:
+            for r in g["rows"]:
+                table.append({"Bereich": f"Gruppe {chr(65 + g['group'])}", "Platz": r["rank"],
+                              "Name": r["name"], "Punkte": r["mp"],
+                              "Sätze": f'{r["gw"]}:{r["gl"]}', "Bälle": f'{r["pw"]}:{r["pl"]}'})
+        for m in await load_matches(db, cid):
+            if m["phase"] != "group":
+                continue
+            o = outcome(c["score_mode"], m["walkover"], m["sets"], m["home_entry_id"], m["away_entry_id"],
+                        c["sets_to_win"], c["points_per_set"])
+            games.append({"Phase": f'Gruppe {chr(65 + (m["group_no"] or 0))}', "Runde": m["round_no"],
+                          "Heim": names.get(m["home_entry_id"], ""), "Gast": names.get(m["away_entry_id"], ""),
+                          "Ergebnis": _sets_text([[s["home_points"], s["away_points"]] for s in m["sets"]], m["walkover"]),
+                          "Sieger": names.get(o["winner"], "") if o["complete"] else ""})
+    if kind in ("ko", "group_ko"):
+        br = await bracket(cid, db)
+        for m in br.get("matches", []):
+            games.append({"Phase": f'KO Runde {m["round"] + 1}', "Runde": m["round"] + 1,
+                          "Heim": m.get("home_name") or "", "Gast": m.get("away_name") or "",
+                          "Ergebnis": _sets_text(m.get("sets"), m.get("walkover")),
+                          "Sieger": m.get("winner_name") or ""})
+        if br.get("champion_name"):
+            table.append({"Bereich": "KO", "Platz": 1, "Name": br["champion_name"], "Punkte": "", "Sätze": "", "Bälle": ""})
+    elif kind == "double_ko":
+        br = await double_bracket(cid, db)
+        for m in br.get("matches", []):
+            if m.get("bye"):
+                continue
+            ph = {"wb": "Winner-Bracket", "lb": "Loser-Bracket", "gf": "Grand Final"}[m["phase"]]
+            games.append({"Phase": ph, "Runde": m["round"] + 1,
+                          "Heim": m.get("home_name") or "", "Gast": m.get("away_name") or "",
+                          "Ergebnis": _sets_text(m.get("sets"), m.get("walkover")),
+                          "Sieger": names.get(m.get("winner"), "")})
+        for pl, key in ((1, "champion_name"), (2, "runner_up_name"), (3, "third_name")):
+            if br.get(key):
+                table.append({"Bereich": "Endstand", "Platz": pl, "Name": br[key], "Punkte": "", "Sätze": "", "Bälle": ""})
+    elif kind == "full_ko":
+        br = await full_bracket(cid, db)
+        for m in br.get("matches", []):
+            if m.get("bye"):
+                continue
+            games.append({"Phase": m.get("label", ""), "Runde": "",
+                          "Heim": m.get("home_name") or "", "Gast": m.get("away_name") or "",
+                          "Ergebnis": _sets_text(m.get("sets"), m.get("walkover")),
+                          "Sieger": names.get(m.get("winner"), "")})
+        for p in br.get("places", []):
+            table.append({"Bereich": "Platzierung", "Platz": p["place"], "Name": p["name"],
+                          "Punkte": "", "Sätze": "", "Bälle": ""})
+    elif kind == "swiss":
+        st = await swiss_state(cid, db)
+        for rd in st["rounds"]:
+            for g in rd["games"]:
+                games.append({"Phase": f'Runde {rd["round"]}', "Runde": rd["round"],
+                              "Heim": g["home_name"], "Gast": g["away_name"],
+                              "Ergebnis": _sets_text(g["sets"], g["walkover"]),
+                              "Sieger": names.get(g.get("winner"), "")})
+            if rd.get("bye"):
+                games.append({"Phase": f'Runde {rd["round"]}', "Runde": rd["round"],
+                              "Heim": rd["bye"]["name"], "Gast": "— Freilos —", "Ergebnis": "", "Sieger": ""})
+        for r in st["standings"]:
+            table.append({"Bereich": "Endstand", "Platz": r["rank"], "Name": r["name"],
+                          "Punkte": r["points"], "Sätze": f'Buchholz {r["buchholz"]}', "Bälle": ""})
+    elif kind == "super_melee":
+        st = await melee_state(cid, db)
+        for rd in st["rounds"]:
+            for g in rd["games"]:
+                games.append({"Phase": f'Runde {rd["round"]}', "Runde": rd["round"],
+                              "Heim": g["home_name"], "Gast": g["away_name"],
+                              "Ergebnis": _sets_text(g["sets"], g["walkover"]),
+                              "Sieger": (g["home_name"] if g["winner"] == "home" else g["away_name"]) if g["winner"] else ""})
+            if rd.get("bye"):
+                games.append({"Phase": f'Runde {rd["round"]}', "Runde": rd["round"],
+                              "Heim": rd["bye"]["name"], "Gast": "— Freilos —", "Ergebnis": "", "Sieger": ""})
+        for r in st["standings"]:
+            table.append({"Bereich": "Endstand", "Platz": r["rank"], "Name": r["name"],
+                          "Punkte": r["points"], "Sätze": f'Diff {r["diff"]}', "Bälle": ""})
+    return {"info": info, "games": games, "table": table}
+
+
+class ClubRow(BaseModel):
+    name: str
+
+
+class ClubsImportIn(BaseModel):
+    clubs: list[ClubRow]
+
+
+@app.post("/api/import/clubs")
+async def import_clubs(body: ClubsImportIn, db=Depends(get_db)):
+    existing = {r["name"].strip().lower(): r["id"] for r in await db.query("SELECT id,name FROM clubs")}
+    added = 0
+    for row in body.clubs:
+        n = (row.name or "").strip()
+        if not n or n.lower() in existing:
+            continue
+        cid = await db.execute("INSERT INTO clubs (name) VALUES (?)", (n,))
+        existing[n.lower()] = cid
+        added += 1
+    return {"ok": True, "added": added, "total": len(existing)}
+
+
+class PlayerRow(BaseModel):
+    club: str = ""
+    last_name: str = ""
+    first_name: str = ""
+    sex: str = ""
+    birth_year: int | None = None
+
+
+class PlayersImportIn(BaseModel):
+    players: list[PlayerRow]
+
+
+@app.post("/api/import/players")
+async def import_players(body: PlayersImportIn, db=Depends(get_db)):
+    """Zusammenführen: Schlüssel = Nachname + Vorname + Geburtsjahr.
+    Unbekannte Vereine führen zum Abbruch (nichts wird geschrieben)."""
+    clubs = {r["name"].strip().lower(): r["id"] for r in await db.query("SELECT id,name FROM clubs")}
+    unknown = sorted({(p.club or "").strip() for p in body.players
+                      if (p.club or "").strip() and (p.club or "").strip().lower() not in clubs})
+    if unknown:
+        raise HTTPException(400, "Unbekannte Vereine: " + ", ".join(unknown) +
+                            ". Bitte zuerst die Vereine anlegen oder importieren.")
+    rows = await db.query("SELECT id,first_name,last_name,birth_year FROM players")
+    key = lambda ln, fn, by: (str(ln).strip().lower(), str(fn).strip().lower(), by or 0)
+    index = {key(r["last_name"], r["first_name"], r["birth_year"]): r["id"] for r in rows}
+    added = updated = 0
+    for p in body.players:
+        ln, fn = (p.last_name or "").strip(), (p.first_name or "").strip()
+        if not ln and not fn:
+            continue
+        by = _year(p.birth_year)
+        club_id = clubs.get((p.club or "").strip().lower())
+        k = key(ln, fn, by)
+        if k in index:
+            await db.execute(
+                "UPDATE players SET club_id=?, sex=?, birth_year=? WHERE id=?",
+                (club_id, (p.sex or "").strip(), by, index[k]))
+            updated += 1
+        else:
+            pid = await db.execute(
+                "INSERT INTO players (club_id,first_name,last_name,sex,remark,birth_year) VALUES (?,?,?,?,?,?)",
+                (club_id, fn, ln, (p.sex or "").strip(), "", by))
+            index[k] = pid
+            added += 1
+    return {"ok": True, "added": added, "updated": updated}
+
+
+@app.delete("/api/competitions")
+async def delete_all_competitions(db=Depends(get_db)):
+    rows = await db.query("SELECT id FROM competitions")
+    for r in rows:
+        await delete_comp(r["id"], db)
+    return {"ok": True, "deleted": len(rows)}
+
+
+@app.delete("/api/players")
+async def delete_all_players(db=Depends(get_db)):
+    used = await db.query_one("SELECT COUNT(*) c FROM entry_members")
+    if used["c"]:
+        raise HTTPException(400, "Es gibt noch Wettbewerbe mit Meldungen. "
+                                 "Bitte zuerst alle Wettbewerbe löschen.")
+    rows = await db.query("SELECT id FROM players")
+    await db.execute("DELETE FROM players", ())
+    return {"ok": True, "deleted": len(rows)}
+
+
+@app.delete("/api/clubs")
+async def delete_all_clubs(db=Depends(get_db)):
+    n = await db.query_one("SELECT COUNT(*) c FROM players")
+    if n["c"]:
+        raise HTTPException(400, f"Es gibt noch {n['c']} Spieler. Bitte zuerst alle Spieler löschen.")
+    rows = await db.query("SELECT id FROM clubs")
+    await db.execute("DELETE FROM clubs", ())
+    return {"ok": True, "deleted": len(rows)}
+
+
 # ---- Gruppe -> KO -------------------------------------------------------------
 class BuildKoIn(BaseModel):
     qualifiers: list[int] | None = None   # None = Vorschau/Planung, sonst gewählte Kandidaten
