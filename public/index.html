@@ -7,6 +7,7 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{ --blue:#12385f; --blue2:#0c2a48; --ball:#f97316; --ballDk:#ea580c; --line:#e2e8f0; }
   *{box-sizing:border-box}
@@ -139,12 +140,39 @@ function Clubs(){
   const add=async()=>{ if(!name.trim())return; await api("/clubs","POST",{name:name.trim(),prefix:prefix.trim()});
     setName("");setPrefix("");load(); };
   const del=async id=>{ try{await api("/clubs/"+id,"DELETE");load();}catch(e){alert(e.message)} };
+  const exp=()=>xlsxDownload([{name:"Vereine",rows:items.map(c=>({Verein:c.name, Kuerzel:c.prefix||""}))}],
+    "TTTurnier_Vereine.xlsx");
+  const imp=async file=>{
+    try{
+      const rows=await xlsxRead(file);
+      const clubs=rows.map(r=>({name:String(r.Verein??r.verein??r.Name??"").trim()})).filter(c=>c.name);
+      if(!clubs.length){ alert("Keine Spalte „Verein“ gefunden oder Datei leer."); return; }
+      const r=await api("/import/clubs","POST",{clubs});
+      alert(`Import abgeschlossen: ${r.added} neue Vereine (bereits vorhandene wurden übersprungen).`);
+      load();
+    }catch(e){ alert("Import fehlgeschlagen: "+(e.message||"unbekannter Fehler")); }
+  };
+  const delAll=async()=>{
+    if(!confirmHard("ALLE Vereine werden unwiderruflich gelöscht.","LÖSCHEN")) return;
+    try{ const r=await api("/clubs","DELETE"); alert(`${r.deleted} Vereine gelöscht.`); load(); }
+    catch(e){ alert(e.message); }
+  };
   return <div className="card"><h3>Vereine</h3><div className="body">
     <div className="row" style={{marginBottom:14}}>
       <div><label>Kürzel</label><input value={prefix} style={{width:80}} onChange={e=>setPrefix(e.target.value)}/></div>
       <div style={{flex:1}}><label>Vereinsname</label><input value={name} style={{width:"100%"}}
         onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()}/></div>
       <button className="btn" onClick={add}>+ Verein</button>
+    </div>
+    <div className="row" style={{marginBottom:14,gap:8,alignItems:"center"}}>
+      <button className="btn ghost" onClick={exp} disabled={!items.length}>Export (Excel)</button>
+      <label className="btn ghost" style={{cursor:"pointer",margin:0}}>
+        Import (Excel)
+        <input type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}}
+          onChange={e=>{const f=e.target.files[0]; e.target.value=""; if(f) imp(f);}}/>
+      </label>
+      <button className="del" style={{marginLeft:"auto"}} onClick={delAll} disabled={!items.length}>
+        Alle Vereine löschen</button>
     </div>
     {items.length===0 && <div className="muted">Noch keine Vereine.</div>}
     {items.map(c=><div key={c.id} className="list-item">
@@ -169,6 +197,38 @@ function Players(){
     }catch(e){ alert("Speichern fehlgeschlagen: "+(e.message||"unbekannter Fehler")); } };
   const del=async id=>{ try{ await api("/players/"+id,"DELETE"); load(); }
     catch(e){ alert("Löschen fehlgeschlagen: "+(e.message||"unbekannter Fehler")); } };
+  const exp=()=>xlsxDownload([{name:"Spieler",rows:items.map(p=>({
+      Verein:p.club||"", Nachname:p.last_name, Vorname:p.first_name,
+      Geschlecht:p.sex||"", Geburtsjahr:p.birth_year||""}))}],
+    "TTTurnier_Spieler.xlsx");
+  const imp=async file=>{
+    try{
+      const rows=await xlsxRead(file);
+      const players=rows.map(r=>({
+        club:String(r.Verein??"").trim(),
+        last_name:String(r.Nachname??"").trim(),
+        first_name:String(r.Vorname??"").trim(),
+        sex:String(r.Geschlecht??"").trim().toLowerCase(),
+        birth_year:(r.Geburtsjahr===""||r.Geburtsjahr==null)?null:Number(r.Geburtsjahr)
+      })).filter(p=>p.last_name||p.first_name);
+      if(!players.length){ alert("Keine Spieler gefunden. Erwartete Spalten: Verein, Nachname, Vorname, Geschlecht, Geburtsjahr."); return; }
+      const ohne=players.filter(p=>!p.birth_year || isNaN(p.birth_year));
+      if(ohne.length){
+        const ok=window.confirm(`Bei ${ohne.length} von ${players.length} Spielern fehlt das Geburtsjahr.\n\n`+
+          `Es wird auf 1900 gesetzt.\n\nOK = Import fortsetzen · Abbrechen = Quelldatei zuerst ändern`);
+        if(!ok) return;
+        ohne.forEach(p=>{p.birth_year=1900;});
+      }
+      const r=await api("/import/players","POST",{players});
+      alert(`Import abgeschlossen: ${r.added} neu, ${r.updated} aktualisiert.`);
+      load();
+    }catch(e){ alert("Import fehlgeschlagen: "+(e.message||"unbekannter Fehler")); }
+  };
+  const delAll=async()=>{
+    if(!confirmHard("ALLE Spieler werden unwiderruflich gelöscht.","LÖSCHEN")) return;
+    try{ const r=await api("/players","DELETE"); alert(`${r.deleted} Spieler gelöscht.`); load(); }
+    catch(e){ alert(e.message); }
+  };
   const startEdit=p=>{ setEdit(p.id); setEf({first_name:p.first_name,last_name:p.last_name,
     club_id:p.club_id?String(p.club_id):"",sex:p.sex||"",birth_year:p.birth_year?String(p.birth_year):""}); };
   const saveEdit=async id=>{
@@ -190,6 +250,16 @@ function Players(){
         value={f.birth_year} onChange={e=>setF({...f,birth_year:e.target.value})}
         onKeyDown={e=>e.key==="Enter"&&add()}/></div>
       <button className="btn" onClick={add}>+ Spieler</button>
+    </div>
+    <div className="row" style={{marginBottom:14,gap:8,alignItems:"center"}}>
+      <button className="btn ghost" onClick={exp} disabled={!items.length}>Export (Excel)</button>
+      <label className="btn ghost" style={{cursor:"pointer",margin:0}}>
+        Import (Excel)
+        <input type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}}
+          onChange={e=>{const f=e.target.files[0]; e.target.value=""; if(f) imp(f);}}/>
+      </label>
+      <button className="del" style={{marginLeft:"auto"}} onClick={delAll} disabled={!items.length}>
+        Alle Spieler löschen</button>
     </div>
     <table><thead><tr><th>Name</th><th>Verein</th><th>m/w</th><th>Jahrgang</th><th></th></tr></thead><tbody>
       {items.map(p=> edit===p.id
@@ -224,6 +294,22 @@ function Comps({onOpen}){
   const create=async()=>{ if(!f.name.trim())return;
     try{ const c=await api("/competitions","POST",{...f,name:f.name.trim()}); load(); onOpen(c.id); }
     catch(e){alert(e.message)} };
+  const archive=async(c)=>{
+    try{
+      const a=await api(`/competitions/${c.id}/archive`);
+      const kopf=Object.entries(a.info).map(([k,v])=>({Feld:k, Wert:String(v)}));
+      xlsxDownload([
+        {name:"Ergebnisse", rows:a.games},
+        {name:"Abschlusstabelle", rows:a.table},
+        {name:"Info", rows:kopf},
+      ], `TTTurnier_${c.name.replace(/[^\wäöüÄÖÜß -]/g,"_")}.xlsx`);
+    }catch(e){ alert("Archivieren fehlgeschlagen: "+(e.message||"unbekannter Fehler")); }
+  };
+  const delAllComps=async()=>{
+    if(!confirmHard("ALLE Wettbewerbe werden unwiderruflich gelöscht (samt Auslosungen und Ergebnissen).","LÖSCHEN")) return;
+    try{ const r=await api("/competitions","DELETE"); alert(`${r.deleted} Wettbewerbe gelöscht.`); load(); }
+    catch(e){ alert(e.message); }
+  };
   const del=async(c,e)=>{ e.stopPropagation();
     if(!window.confirm(`Wettbewerb „${c.name}" wirklich löschen?\nAlle Auslosungen, Spiele und Ergebnisse gehen dabei unwiderruflich verloren.`)) return;
     try{ await api("/competitions/"+c.id,"DELETE"); load(); }catch(err){alert(err.message)} };
@@ -293,10 +379,15 @@ function Comps({onOpen}){
       </div>
     </div></div>
     <div className="card"><h3>Wettbewerbe</h3><div className="body">
+      {items.length>0 && <div className="row" style={{marginBottom:12}}>
+        <button className="del" style={{marginLeft:"auto"}} onClick={delAllComps}>Alle Wettbewerbe löschen</button>
+      </div>}
       {items.length===0 && <div className="muted">Noch keine Wettbewerbe.</div>}
       {items.map(c=><div key={c.id} className="list-item" style={{cursor:"pointer"}} onClick={()=>onOpen(c.id)}>
         <b style={{flex:1}}>{c.name}</b><span className="pill">{c.mode_label}</span>
         <span className="pill">{c.status}</span>
+        <button className="btn ghost" title="Ergebnisse als Excel archivieren"
+          onClick={e=>{e.stopPropagation(); archive(c);}}>Archiv</button>
         <button className="del" title="Wettbewerb löschen" onClick={e=>del(c,e)}>🗑</button>
         <span className="muted">›</span></div>)}
     </div></div>
@@ -671,6 +762,32 @@ function SetupDoublesDraw({c,players,onDone,flash}){
       <label style={{fontSize:12}}><input type="checkbox" checked={!!koSeed[e.id]} onChange={()=>setKoSeed(s=>({...s,[e.id]:!s[e.id]}))}/> gesetzt</label></div>)}
     <div style={{marginTop:14}}><button className="btn" onClick={doDraw} disabled={c.entries.length<2}>KO auslosen ({c.entries.length} Doppel)</button></div>
   </div></div>;
+}
+
+// ---------------------------------------------------------------- Excel-Hilfen
+function xlsxDownload(sheets, filename){
+  const wb=XLSX.utils.book_new();
+  sheets.forEach(({name,rows})=>{
+    const ws=XLSX.utils.json_to_sheet(rows.length?rows:[{}]);
+    XLSX.utils.book_append_sheet(wb,ws,name.slice(0,31));
+  });
+  XLSX.writeFile(wb, filename);
+}
+function xlsxRead(file){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=e=>{ try{
+      const wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});
+      res(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""}));
+    }catch(err){ rej(err); } };
+    r.onerror=()=>rej(new Error("Datei konnte nicht gelesen werden."));
+    r.readAsArrayBuffer(file);
+  });
+}
+// Sicherheitsabfrage: Bestätigungswort muss getippt werden
+function confirmHard(text, word){
+  const a=window.prompt(text+"\n\nZum Bestätigen bitte "+word+" eintippen:");
+  return a!==null && a.trim().toUpperCase()===word;
 }
 
 // Teilnehmerfilter: Altersklasse (nach Geburtsjahr, erwachsen ab 18) und Geschlecht.
