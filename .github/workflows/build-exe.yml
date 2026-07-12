@@ -1,1 +1,43 @@
+name: Windows-EXE bauen
 
+# Manuell startbar: Reiter "Actions" -> "Windows-EXE bauen" -> "Run workflow"
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Quellcode holen
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhängigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi "uvicorn[standard]" pydantic pyinstaller
+
+      - name: EXE bauen
+        run: >
+          pyinstaller --onefile --name TTTurnier
+          --add-data "public;public"
+          --add-data "migrations;migrations"
+          --add-data "src;src"
+          --hidden-import uvicorn.logging
+          --hidden-import uvicorn.loops.auto
+          --hidden-import uvicorn.protocols.http.auto
+          --hidden-import uvicorn.protocols.websockets.auto
+          --hidden-import uvicorn.lifespan.on
+          run_local.py
+
+      - name: EXE bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTTurnier-Windows
+          path: dist/TTTurnier.exe
+          retention-days: 30
