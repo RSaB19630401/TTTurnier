@@ -112,8 +112,9 @@ async def login(request: Request, body: LoginIn):
     if not ok:
         raise HTTPException(401, "Benutzername oder Passwort falsch.")
     resp = JSONResponse({"ok": True})
+    https = request.url.scheme == "https"
     resp.set_cookie(AUTH_COOKIE, _make_token(secret), max_age=SESSION_HOURS * 3600,
-                    httponly=True, secure=True, samesite="lax", path="/")
+                    httponly=True, secure=https, samesite="lax", path="/")
     return resp
 
 
