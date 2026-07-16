@@ -1352,38 +1352,66 @@ class BuildKoIn(BaseModel):
     qualifiers: list[int] | None = None   # None = Vorschau/Planung, sonst gewählte Kandidaten
 
 
-def _plan_ko_qualifiers(rk: dict, N: int):
-    """Ermittelt sichere Aufsteiger und die zur Auswahl stehenden Kandidaten.
-    Kandidat = echter Patt an der Aufstiegsgrenze ('patt') oder bester Dritter/Auffüllen ('fill')."""
-    safe, candidates = [], []
+def _ratio(v):
+    return float("inf") if v is None else v
+
+
+def _cand(r, gi, reason):
+    return {"entry": r["entry"], "name": r["name"], "group": gi, "rank": r["rank"],
+            "mp": r["mp"], "gw": r["gw"], "gl": r["gl"], "set_ratio": r["set_ratio"],
+            "club_id": r["club_id"], "reason": reason}
+
+
+def _plan_ko_qualifiers(rk, N):
+    """Ermittelt sichere Aufsteiger und – nur bei echtem, nicht auflösbarem Gleichstand –
+    die zur Auswahl stehenden Kandidaten.
+    Grundsatz: Sind die ersten N jeder Gruppe eindeutig, wird nicht gefragt. Beste Dritte
+    werden nur herangezogen, wenn der KO-Baum freie Plätze hat, und auch dann automatisch,
+    solange ihre Reihenfolge eindeutig ist."""
+    safe, candidates, best_thirds, regular = [], [], [], 0
     for g in rk["groups"]:
         rows = g["rows"]; gi = g["group"]
         unresolved = g.get("unresolved") or []
+        regular += min(N, len(rows))
+        # Echter Patt an der Aufstiegsgrenze? (Gleichstand, den auch der direkte Vergleich nicht löst)
         straddle, straddle_top = None, None
         for U in unresolved:
             ranks = [r["rank"] for r in rows if r["entry"] in U]
             if ranks and min(ranks) <= N and max(ranks) > N:
                 straddle, straddle_top = set(U), min(ranks); break
         if straddle:
-            safe_here = [r for r in rows if r["rank"] < straddle_top]
-            cand_here = [r for r in rows if r["entry"] in straddle]
-            reason = "patt"
-        else:
-            safe_here = [r for r in rows if r["rank"] <= N]
-            cand_here = [r for r in rows if r["rank"] == N + 1]
-            # bei Gleichstand auf dem N+1-Platz die ganze betroffene Gruppe aufnehmen
+            safe.extend(r["entry"] for r in rows if r["rank"] < straddle_top)
+            candidates.extend(_cand(r, gi, "patt") for r in rows if r["entry"] in straddle)
+            continue
+        # ersten N sind eindeutig -> sicher
+        safe.extend(r["entry"] for r in rows if r["rank"] <= N)
+        # bester Dritter dieser Gruppe (Platz N+1), inkl. Hinweis auf gruppeninternen Gleichstand
+        bt = next((r for r in rows if r["rank"] == N + 1), None)
+        if bt is not None:
+            tie = None
             for U in unresolved:
-                if any(r["entry"] in U for r in cand_here):
-                    for r in rows:
-                        if r["entry"] in U and r not in cand_here:
-                            cand_here.append(r)
-            reason = "fill"
-        safe.extend(r["entry"] for r in safe_here)
-        for r in cand_here:
-            candidates.append({"entry": r["entry"], "name": r["name"], "group": gi,
-                               "rank": r["rank"], "mp": r["mp"], "gw": r["gw"], "gl": r["gl"],
-                               "set_ratio": r["set_ratio"], "club_id": r["club_id"], "reason": reason})
-    return safe, candidates
+                if bt["entry"] in U and len(U) > 1:
+                    tie = [r for r in rows if r["entry"] in U]; break
+            best_thirds.append({"row": bt, "group": gi, "tie": tie})
+
+    # Freie Plätze im KO-Baum? Nur dann sind beste Dritte überhaupt relevant.
+    free = (D.next_pow2(regular) - regular) if regular >= 2 else 0
+    if free > 0 and best_thirds:
+        key = lambda bt: (bt["row"]["mp"], _ratio(bt["row"]["set_ratio"]), _ratio(bt["row"]["point_ratio"]))
+        order = sorted(best_thirds, key=key, reverse=True)
+        take = min(free, len(order))
+        cutoff_tie = take < len(order) and key(order[take - 1]) == key(order[take])
+        intra_tie = any(bt["tie"] for bt in order[:take])
+        if cutoff_tie or intra_tie:
+            # Auswahl nötig: alle beteiligten besten Dritten (und ihre Gleichstands-Partner) anbieten
+            for bt in order:
+                candidates.append(_cand(bt["row"], bt["group"], "fill"))
+                for rr in (bt["tie"] or []):
+                    if rr["entry"] != bt["row"]["entry"]:
+                        candidates.append(_cand(rr, bt["group"], "fill"))
+        else:
+            safe.extend(bt["row"]["entry"] for bt in order[:take])
+    return safe, candidates, regular
 
 
 @app.post("/api/competitions/{cid}/build_ko")
@@ -1403,15 +1431,15 @@ async def build_ko(cid: int, body: BuildKoIn | None = None, seed: int | None = N
 
     rk = await ranking(cid, db)
     N = c["advance_per_group"]
-    safe, candidates = _plan_ko_qualifiers(rk, N)
+    safe, candidates, regular = _plan_ko_qualifiers(rk, N)
     cand_ids = {x["entry"] for x in candidates}
     entries = {e["id"]: e for e in await load_entries(db, cid)}
 
-    # Stufe 1: Auswahl nötig? -> Kandidaten zurückmelden, noch nicht bauen.
+    # Stufe 1: Auswahl nötig? -> nur bei echtem Gleichstand/mehrdeutigem Auffüllen.
     if body is None or body.qualifiers is None:
         if candidates:
             return {"ok": True, "built": False, "needs_selection": True,
-                    "regular_target": len(rk["groups"]) * N,
+                    "regular_target": regular,
                     "safe": [{"entry": eid, "name": entries.get(eid, {}).get("name")} for eid in safe],
                     "candidates": candidates}
         chosen = []
