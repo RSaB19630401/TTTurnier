@@ -36,9 +36,19 @@
   th{text-align:left;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:6px 8px;font-weight:600}
   td{padding:8px;border-top:1px solid #f1f5f9}
   .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#eef2f7;color:#475569}
-  .list-item{display:flex;align-items:center;gap:10px;background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:6px}
+  .list-item{display:flex;align-items:center;gap:10px;background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:8px 12px;margin-bottom:6px;flex-wrap:wrap}
   .del{color:#94a3b8;background:none;border:none;cursor:pointer;font-size:14px} .del:hover{color:#e11d48}
-  .score{width:34px;text-align:center;border:1px solid #cbd5e1;border-radius:6px;padding:4px 0;font-size:13px;font-family:ui-monospace,monospace}
+  .score{width:40px;height:38px;text-align:center;border:1.5px solid #94a3b8;border-radius:7px;padding:2px 0;font-size:17px;font-family:ui-monospace,monospace;background:#fff;color:#0f172a}
+  .score:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(30,58,95,.18)}
+  .scorerow{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+  .setbox{display:inline-flex;flex-direction:column;align-items:center;gap:2px}
+  .setbox .setnum{font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:.03em}
+  .setbox .pair{display:inline-flex;align-items:center;gap:3px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:9px;padding:4px 6px}
+  .setbox .sep{color:#94a3b8;font-weight:700}
+  .resultchip{display:inline-flex;align-items:center;gap:7px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;
+    padding:5px 11px;font-family:ui-monospace,monospace;font-size:14px;color:#0f172a;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .resultchip:hover{border-color:var(--blue);background:#f8fafc}
+  .resultchip .rc-ed{color:#94a3b8;font-size:12px}
   .badge{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;color:#fff;font-weight:700;font-size:12px}
   .muted{color:#94a3b8} .win{color:#047857;font-weight:700}
   .rankrow.up{background:#ecfdf5}
@@ -59,7 +69,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useEffect} = React;
+const {useState,useEffect,useRef} = React;
 const LET="ABCDEFGHIJKLMNOP";
 async function api(path,method="GET",body){
   const r=await fetch("/api"+path,{method,headers:{"Content-Type":"application/json"},
@@ -432,7 +442,7 @@ function FullBracketView({c,flash}){
           : (m.home&&m.away
               ? ((edit===m.id || !m.winner)
                   ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
-                  : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>{m.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>)
+                  : <ResultChip sets={m.sets} walkover={m.walkover} onEdit={()=>setEdit(m.id)}/>)
               : <span className="muted" style={{fontSize:12}}>wartet</span>)}
       </div>)}
     </div></div>)}
@@ -517,7 +527,7 @@ function SwissPlay({c,flash}){
         </div>
         {(edit===g.id || !g.complete)
           ? <SetEntry sets={g.sets} maxSets={maxG} walkover={g.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(g.id,b)}/>
-          : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(g.id)}>{g.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
+          : <ResultChip sets={g.sets} walkover={g.walkover} onEdit={()=>setEdit(g.id)}/>}
       </div>)}
       {rd.bye && <div className="list-item"><span style={{flex:1}}><b>{rd.bye.name}</b></span><span className="pill">Freilos · 1 Punkt</span></div>}
     </div></div>)}
@@ -590,7 +600,7 @@ function MeleePlay({c,flash}){
         </div>
         {(edit===g.id || !g.complete)
           ? <SetEntry sets={g.sets} maxSets={maxG} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(g.id,b)}/>
-          : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(g.id)}>{g.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
+          : <ResultChip sets={g.sets} walkover={g.walkover} onEdit={()=>setEdit(g.id)}/>}
       </div>)}
       {rd.bye && <div className="list-item"><span style={{flex:1}}><b>{rd.bye.name}</b></span><span className="pill">Freilos · je 1 Punkt</span></div>}
     </div></div>)}
@@ -842,33 +852,47 @@ function setWinner(h,a){
   return H>A?"h":"a";
 }
 
+function ResultChip({sets,walkover,onEdit}){
+  const label = walkover ? "kampflos" : (sets&&sets.length ? sets.map(s=>s.join(":")).join("  ") : "—");
+  return <button className="resultchip" title="Zum Ändern klicken" onClick={onEdit}>
+    <span className="rc-ed">✎</span>{label}</button>;
+}
+
 function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
   const setsOnly = scoreMode==="sets";
-  const init = sets&&sets.length ? sets.map(s=>[""+s[0],""+s[1]]) : [["",""]];
-  // Dynamik (Punkte-Modus): Leerzeilen entfernen, nach Entscheidung abschneiden,
-  // sonst genau eine leere Zeile anbieten (bis maxSets).
-  const normalize=(rs)=>{
-    let r=rs.map(x=>[...x]).filter(x=>x[0]!==""||x[1]!=="");
-    let hw=0,aw=0,cut=-1;
-    for(let i=0;i<r.length;i++){
-      const w=setWinner(r[i][0],r[i][1]);
-      if(w==="h")hw++; else if(w==="a")aw++;
-      if(hw>=setsToWin||aw>=setsToWin){cut=i;break;}
-    }
-    if(cut>=0) return r.slice(0,cut+1);
-    const last=r[r.length-1];
-    const lastComplete = last && last[0]!=="" && last[1]!=="";
-    if((r.length===0||lastComplete) && r.length<maxSets) r.push(["",""]);
-    if(r.length===0) r.push(["",""]);
-    return r;
+  const init = sets&&sets.length ? sets.map(s=>[""+s[0],""+s[1]]) : [];
+  // Punkte-Modus: immer alle möglichen Satzfelder anzeigen (maxSets = 2*Gewinnsätze-1)
+  const makeRows = () => {
+    const r = init.map(x=>[...x]);
+    while(r.length < maxSets) r.push(["",""]);
+    return r.slice(0, Math.max(maxSets,1));
   };
-  const [rows,setRows]=useState(()=> setsOnly ? init : normalize(init));
+  const [rows,setRows]=useState(()=> setsOnly ? (init.length?init.map(x=>[...x]):[["",""]]) : makeRows());
   const [wo,setWo]=useState(walkover||null);
+  const inputs = useRef([]);
+
   const upd=(i,side,v)=>{
     const r=rows.map(x=>[...x]);
     r[i][side]=v.replace(/[^0-9]/g,"").slice(0,2);
-    setRows(setsOnly ? r : normalize(r));
+    setRows(r);
   };
+
+  // Ist das Ergebnis bereits entschieden? (steuert Enter = speichern)
+  const decided=()=>{
+    if(setsOnly){
+      const h=+rows[0][0]||0,a=+rows[0][1]||0,win=Math.max(h,a),lose=Math.min(h,a);
+      return win===setsToWin && lose<setsToWin && h!==a;
+    }
+    let hw=0,aw=0;
+    for(const s of rows){
+      if(s[0]===""&&s[1]==="") continue;
+      if(!validPointSet(s[0],s[1])) return false;
+      const w=setWinner(s[0],s[1]); if(w==="h")hw++; else if(w==="a")aw++;
+      if(hw>=setsToWin||aw>=setsToWin) return true;
+    }
+    return false;
+  };
+
   const save=()=>{
     if(wo){ onSave({walkover:wo}); return; }
     if(setsOnly){
@@ -879,30 +903,54 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
       onSave({sets:[[h,a]]}); return;
     }
     const filled=rows.filter(s=>s[0]!==""||s[1]!=="");
-    for(const s of filled){
+    let hw=0,aw=0,decidedAt=-1;
+    for(let i=0;i<filled.length;i++){
+      const s=filled[i];
       if(!validPointSet(s[0],s[1])){
         alert(`Ungültiger Satz ${s[0]||0}:${s[1]||0} – der Gewinner braucht ${TARGET_POINTS} Punkte mit 2 Punkten Vorsprung (bei Einstand ${TARGET_POINTS-1}:${TARGET_POINTS-1} entsprechend 12:10, 13:11 …).`); return;
       }
+      const w=setWinner(s[0],s[1]); if(w==="h")hw++; else if(w==="a")aw++;
+      if(decidedAt<0 && (hw>=setsToWin||aw>=setsToWin)) decidedAt=i;
     }
-    let hw=0,aw=0;
-    for(const s of filled){ const w=setWinner(s[0],s[1]); if(w==="h")hw++; else if(w==="a")aw++; }
-    if(hw<setsToWin && aw<setsToWin){
-      alert(`Unvollständig: Es hat noch niemand ${setsToWin} Sätze gewonnen.`); return;
-    }
+    if(hw<setsToWin && aw<setsToWin){ alert(`Unvollständig: Es hat noch niemand ${setsToWin} Sätze gewonnen.`); return; }
+    if(decidedAt>=0 && filled.length>decidedAt+1){ alert(`Zu viele Sätze: Das Spiel war nach Satz ${decidedAt+1} bereits entschieden.`); return; }
     onSave({sets:filled.map(s=>[+s[0],+s[1]])});
   };
-  return <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-    {!wo && setsOnly && <span title="Sätze Heim : Gast">
-      <input className="score" value={rows[0][0]} onChange={e=>upd(0,0,e.target.value)}/>
-      <span className="muted"> Sätze : </span>
-      <input className="score" value={rows[0][1]} onChange={e=>upd(0,1,e.target.value)}/></span>}
-    {!wo && !setsOnly && rows.map((s,i)=><span key={i}>
-      <input className="score" value={s[0]} onChange={e=>upd(i,0,e.target.value)}/>
-      <span className="muted">:</span>
-      <input className="score" value={s[1]} onChange={e=>upd(i,1,e.target.value)}/></span>)}
-    {wo && <span className="pill">kampflos {wo==="home"?"◀":"▶"}</span>}
-    <button className="btn ghost" onClick={()=>{setWo(wo==="home"?null:"home")}}>w.o.◀</button>
-    <button className="btn ghost" onClick={()=>{setWo(wo==="away"?null:"away")}}>▶w.o.</button>
+
+  const onKey=(e,idx)=>{
+    if(e.key!=="Enter") return;
+    e.preventDefault();
+    if(decided() || idx>=inputs.current.length-1){ save(); return; }
+    const nxt=inputs.current[idx+1]; if(nxt) nxt.focus();
+  };
+  const cell=(i,side,idx)=> <input className="score" inputMode="numeric" pattern="[0-9]*"
+      ref={el=>inputs.current[idx]=el} value={rows[i][side]}
+      onChange={e=>upd(i,side,e.target.value)} onKeyDown={e=>onKey(e,idx)}
+      onFocus={e=>e.target.select()}/>;
+
+  if(wo){
+    return <div className="scorerow">
+      <span className="pill">kampflos {wo==="home"?"◀":"▶"}</span>
+      <button className="btn ghost" onClick={()=>setWo(null)}>zurück</button>
+      <button className="btn blue" onClick={save}>OK</button>
+    </div>;
+  }
+  if(setsOnly){
+    return <div className="scorerow">
+      <div className="setbox"><span className="setnum">SÄTZE</span>
+        <span className="pair">{cell(0,0,0)}<span className="sep">:</span>{cell(0,1,1)}</span></div>
+      <button className="btn ghost" onClick={()=>setWo("home")}>w.o.◀</button>
+      <button className="btn ghost" onClick={()=>setWo("away")}>▶w.o.</button>
+      <button className="btn blue" onClick={save}>OK</button>
+    </div>;
+  }
+  return <div className="scorerow">
+    {rows.map((s,i)=><div className="setbox" key={i}>
+      <span className="setnum">SATZ {i+1}</span>
+      <span className="pair">{cell(i,0,i*2)}<span className="sep">:</span>{cell(i,1,i*2+1)}</span>
+    </div>)}
+    <button className="btn ghost" onClick={()=>setWo("home")} title="kampflos für Heim">w.o.◀</button>
+    <button className="btn ghost" onClick={()=>setWo("away")} title="kampflos für Gast">▶w.o.</button>
     <button className="btn blue" onClick={save}>OK</button>
   </div>;
 }
@@ -918,8 +966,7 @@ function DoubleBracketView({de,c,edit,setEdit,saveResult,maxK}){
       : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
           {(edit===m.id || !m.winner)
             ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
-            : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
-                {m.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
+            : <ResultChip sets={m.sets} walkover={m.walkover} onEdit={()=>setEdit(m.id)}/>}
         </div>)}
   </div>;
   const cols=(list)=>{
@@ -1014,8 +1061,7 @@ function Play({c,onChange,flash}){
             <Hcp c={c} meId={m.away} otherId={m.home}/></div>
           {(edit===m.id || !m.complete)
             ? <SetEntry sets={m.sets} maxSets={maxG} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(m.id,b)}/>
-            : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
-                {m.sets.map(s=>s.join(":")).join("  ")||"w.o."}</button>}
+            : <ResultChip sets={m.sets} walkover={m.walkover} onEdit={()=>setEdit(m.id)}/>}
         </div>)}
       </div></div>
       {c.kind==="group_ko" && !br?.rounds && !koSel && <button className="btn" disabled={!groupsDone} onClick={buildKO}>
@@ -1063,8 +1109,7 @@ function Play({c,onChange,flash}){
                 : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
                     {(edit===m.id || !m.winner)
                       ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
-                      : <button className="btn ghost" title="Zum Korrigieren klicken" onClick={()=>setEdit(m.id)}>
-                          {m.sets.map(s=>s.join(":")).join(" ")||"w.o."}</button>}
+                      : <ResultChip sets={m.sets} walkover={m.walkover} onEdit={()=>setEdit(m.id)}/>}
                   </div>)}
             </div>)}
           </div>;
