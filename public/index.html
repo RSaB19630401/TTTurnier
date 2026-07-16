@@ -49,6 +49,12 @@
     padding:5px 11px;font-family:ui-monospace,monospace;font-size:14px;color:#0f172a;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.08)}
   .resultchip:hover{border-color:var(--blue);background:#f8fafc}
   .resultchip .rc-ed{color:#94a3b8;font-size:12px}
+  .scorerow.compact{flex-wrap:nowrap}
+  .scorerow.compact .pair{padding:3px 4px;gap:2px}
+  .scorerow.compact .score{width:30px;height:32px;font-size:15px}
+  .scorerow.compact .setnum{font-size:9px}
+  .scorerow.compact .btn{padding:5px 8px;font-size:12px}
+  .bmatch.editing{overflow:visible}
   .badge{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;color:#fff;font-weight:700;font-size:12px}
   .muted{color:#94a3b8} .win{color:#047857;font-weight:700}
   .rankrow.up{background:#ecfdf5}
@@ -59,7 +65,7 @@
   .modeopt .lab{font-weight:600} .modeopt .hint{color:#94a3b8;font-size:11px;margin-top:2px}
   .flash{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;padding:8px 12px;border-radius:8px;font-size:13px;margin-bottom:10px}
   .bracket{display:flex;gap:22px;overflow-x:auto;padding-bottom:8px}
-  .bcol{display:flex;flex-direction:column;justify-content:space-around;gap:12px;min-width:210px}
+  .bcol{display:flex;flex-direction:column;justify-content:space-around;gap:12px;min-width:210px;flex-shrink:0}
   .bmatch{border:1px solid var(--line);border-radius:9px;background:#fff;overflow:hidden}
   .bslot{padding:6px 10px;font-size:13px;display:flex;justify-content:space-between}
   .bslot+.bslot{border-top:1px solid #f1f5f9}
@@ -858,8 +864,9 @@ function ResultChip({sets,walkover,onEdit}){
     <span className="rc-ed">✎</span>{label}</button>;
 }
 
-function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
+function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin,compact}){
   const setsOnly = scoreMode==="sets";
+  const rowCls = "scorerow"+(compact?" compact":"");
   const init = sets&&sets.length ? sets.map(s=>[""+s[0],""+s[1]]) : [];
   // Punkte-Modus: immer alle möglichen Satzfelder anzeigen (maxSets = 2*Gewinnsätze-1)
   const makeRows = () => {
@@ -929,14 +936,14 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
       onFocus={e=>e.target.select()}/>;
 
   if(wo){
-    return <div className="scorerow">
+    return <div className={rowCls}>
       <span className="pill">kampflos {wo==="home"?"◀":"▶"}</span>
       <button className="btn ghost" onClick={()=>setWo(null)}>zurück</button>
       <button className="btn blue" onClick={save}>OK</button>
     </div>;
   }
   if(setsOnly){
-    return <div className="scorerow">
+    return <div className={rowCls}>
       <div className="setbox"><span className="setnum">SÄTZE</span>
         <span className="pair">{cell(0,0,0)}<span className="sep">:</span>{cell(0,1,1)}</span></div>
       <button className="btn ghost" onClick={()=>setWo("home")}>w.o.◀</button>
@@ -944,7 +951,7 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
       <button className="btn blue" onClick={save}>OK</button>
     </div>;
   }
-  return <div className="scorerow">
+  return <div className={rowCls}>
     {rows.map((s,i)=><div className="setbox" key={i}>
       <span className="setnum">SATZ {i+1}</span>
       <span className="pair">{cell(i,0,i*2)}<span className="sep">:</span>{cell(i,1,i*2+1)}</span>
@@ -956,7 +963,8 @@ function SetEntry({sets,maxSets,onSave,walkover,scoreMode,setsToWin}){
 }
 
 function DoubleBracketView({de,c,edit,setEdit,saveResult,maxK}){
-  const matchCell=(m)=><div className="bmatch" key={m.node}>
+  const matchCell=(m)=>{ const editingHere = !m.bye && m.home && m.away && (edit===m.id || !m.winner);
+    return <div className={"bmatch"+(editingHere?" editing":"")} key={m.node}>
     <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
       <Hcp c={c} meId={m.home} otherId={m.away}/></div>
     <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name|| (m.bye?<i className="muted">Freilos</i>:<i className="muted">…</i>)}</span>
@@ -965,10 +973,10 @@ function DoubleBracketView({de,c,edit,setEdit,saveResult,maxK}){
       ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>kampflos weiter</div>
       : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
           {(edit===m.id || !m.winner)
-            ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
+            ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} compact onSave={b=>saveResult(m.id,b)}/>
             : <ResultChip sets={m.sets} walkover={m.walkover} onEdit={()=>setEdit(m.id)}/>}
         </div>)}
-  </div>;
+  </div>; };
   const cols=(list)=>{
     const rounds=[...new Set(list.map(m=>m.round))].sort((a,b)=>a-b);
     return rounds.map(r=><div key={r} className="bcol">
@@ -1054,11 +1062,13 @@ function Play({c,onChange,flash}){
       <div className="card"><h3>Spielplan – Gruppe {LET[grp]}</h3><div className="body">
         {groupMatches.map(m=><div key={m.id} className="list-item">
           <span className="muted" style={{width:34,fontFamily:"monospace"}}>R{m.round_no}</span>
-          <div style={{flex:1,textAlign:"right"}}><span className={m.complete&&m.winner===m.home?"win":""}>{m.home_name}</span>
-            <Hcp c={c} meId={m.home} otherId={m.away}/></div>
-          <span className="muted">vs</span>
-          <div style={{flex:1}}><span className={m.complete&&m.winner===m.away?"win":""}>{m.away_name}</span>
-            <Hcp c={c} meId={m.away} otherId={m.home}/></div>
+          <div style={{flex:1}}>
+            <span className={m.complete&&m.winner===m.home?"win":""}>{m.home_name}</span>
+            <Hcp c={c} meId={m.home} otherId={m.away}/>
+            <span className="muted"> vs </span>
+            <span className={m.complete&&m.winner===m.away?"win":""}>{m.away_name}</span>
+            <Hcp c={c} meId={m.away} otherId={m.home}/>
+          </div>
           {(edit===m.id || !m.complete)
             ? <SetEntry sets={m.sets} maxSets={maxG} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.sets_to_win} onSave={b=>saveResult(m.id,b)}/>
             : <ResultChip sets={m.sets} walkover={m.walkover} onEdit={()=>setEdit(m.id)}/>}
@@ -1099,7 +1109,8 @@ function Play({c,onChange,flash}){
           const nm=(left=>left===1?"Finale":left===2?"Halbfinale":left===3?"Viertelfinale":left===4?"Achtelfinale":"Runde "+(r+1))(br.rounds-r);
           return <div key={r} className="bcol">
             <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:1,color:"var(--blue)",fontWeight:700,textAlign:"center"}}>{nm}</div>
-            {ms.map(m=><div key={m.id} className="bmatch">
+            {ms.map(m=>{ const editingHere = !m.bye && m.home && m.away && (edit===m.id || !m.winner);
+              return <div key={m.id} className={"bmatch"+(editingHere?" editing":"")}>
               <div className="bslot"><span className={m.winner&&m.winner===m.home?"win":""}>{m.home_name||<i className="muted">wartet…</i>}</span>
                 <Hcp c={c} meId={m.home} otherId={m.away}/></div>
               <div className="bslot"><span className={m.winner&&m.winner===m.away?"win":""}>{m.away_name||<i className="muted">wartet…</i>}</span>
@@ -1108,10 +1119,10 @@ function Play({c,onChange,flash}){
                 ? <div className="bslot muted" style={{fontSize:11,background:"#f8fafc"}}>Freilos</div>
                 : (m.home&&m.away && <div className="bslot" style={{background:"#f8fafc"}}>
                     {(edit===m.id || !m.winner)
-                      ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} onSave={b=>saveResult(m.id,b)}/>
+                      ? <SetEntry sets={m.sets} maxSets={maxK} walkover={m.walkover} scoreMode={c.score_mode} setsToWin={c.ko_sets_to_win} compact onSave={b=>saveResult(m.id,b)}/>
                       : <ResultChip sets={m.sets} walkover={m.walkover} onEdit={()=>setEdit(m.id)}/>}
                   </div>)}
-            </div>)}
+            </div>; })}
           </div>;
         })}
       </div>
